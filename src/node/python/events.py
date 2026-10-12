@@ -36,6 +36,17 @@ KINDS = {
     "red_light_violation": (98, "signalViolation", ["person", "cyclist"], True, 30, "CdS art. 146", "violation"),
     "late_yellow": (98, "signalViolation", ["person", "cyclist"], False, 15, "CdS art. 41, 146", "risk"),
     "pedestrian_red_crossing": (98, "signalViolation", ["vehicle"], False, 15, "CdS art. 190", "risk"),
+    # --- v2 (ARCHITETTURA §2.8): li genera il nodo (crosswalk.py, power), mai le regole di situation.py ---
+    # attraversamento in "conflict": veicolo con ETA <= conflict_eta_s mentre qualcuno e' sul bordo o
+    # sulle strisce (gravita' 2-3); chi aspetta resta fermo, chi guida deve dare precedenza
+    "crossing_conflict": (97, "collisionRisk", TUTTI, False, 10, "CdS art. 191", "risk"),
+    # un utente non vedente (Tag "blind") viene assistito: "new" all'inizio, "cancel" alla fine
+    "assisted_crossing": (12, "humanPresenceOnTheRoad", ["vehicle", "cyclist"], False, 120, "CdS art. 191 c. 3", "info"),
+    # mezzo di soccorso (Tag o camera) che passa: corridoio inoltrato lungo la sua direzione
+    "emergency_corridor": (95, "emergencyVehicleApproaching", TUTTI, True, 60, "CdS art. 177", "emergency"),
+    # sensore di risveglio guasto: il nodo resta sveglio. Nessun causeCode ETSI descrive un guasto del
+    # nodo (non e' un DENM per la strada): 0 = "non disponibile"; nessun utente della strada interessato
+    "wake_sensor_fault": (0, "unavailable", [], False, 3600, "-", "info"),
 }
 STATION_TYPE = {"person": 1, "cyclist": 2, "vehicle": 5, "emergency": 10}  # ETSI StationType
 

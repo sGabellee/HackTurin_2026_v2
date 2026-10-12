@@ -1,22 +1,37 @@
-"""Archivio locale SQLite del nodo: eventi, tracce, statistiche, stato, heatmap e coda di invio.
+"""Archivio locale SQLite del nodo: eventi, tracce, statistiche, stato, heatmap (+ coda di invio v1).
 
 Un solo file (smartcrossing.db) in modalita' WAL: il nodo scrive mentre l'API locale o gli
 strumenti di export leggono, senza bloccarsi a vicenda. Ogni messaggio e' salvato come JSON
 integrale (query() restituisce i dict originali) piu' poche colonne indicizzate per filtrare.
-La tabella outbox e' la coda verso il server: sopravvive ai riavvii, cosi' quello che non e'
-partito con la rete giu' parte quando la rete torna.
+Nella v2 i dati restano qui finche' il collettore non viene a prenderli (export, sotto); la
+tabella outbox (coda di invio push della v1) resta solo per compatibilita'.
 
 I metodi usati a runtime non sollevano mai eccezioni: scrivono un avviso e restituiscono un
 valore vuoto (solo il costruttore puo' fallire, e il nodo allora va avanti senza archivio).
+
+Export per il collettore (pull, ARCHITETTURA.md §5.1): export(cursor, limit) restituisce in ordine
+di arrivo gli elementi salvati dopo il cursore. Il cursore e' opaco per il collettore, es.
+"d48213977.e120.t45.s7.u9.m3" = identita' dell'archivio + ultimo rid letto per tabella (events,
+tracks, stats, status, messages senza "scene"). Il nodo non cancella nulla per l'export (vale
+retention_days). Cursore malformato o di un altro archivio (file ricreato) = si riparte dall'inizio;
+rid oltre la fine di una tabella (tabella svuotata dalla pulizia) = quella tabella riparte da capo.
 """
 import json
 import os
+import re
+import secrets
 import sqlite3
 import threading
 import time
 from pathlib import Path
 
 OUTBOX_MAX = 50000  # righe massime in coda di invio: oltre, si scartano le piu' vecchie
+EXPORT_LIMIT_MAX = 2000              # elementi massimi per pagina di export
+EXPORT_MAX_BYTES = 4_000_000         # JSON massimo per pagina (le stats con la heatmap pesano)
+# tabella esportata -> lettera nel cursore (l'ordine decide chi viene prima a parita' di ts)
+EXPORT_TABLES = (("events", "e"), ("tracks", "t"), ("stats", "s"), ("status", "u"), ("messages", "m"))
+EXPORT_SKIP_TYPES = ("scene",)       # tipi della tabella messages che non si esportano (1 al secondo)
+_CURSOR_TOKEN = re.compile(r"([a-z])(\d{1,18})")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -49,6 +64,8 @@ CREATE TABLE IF NOT EXISTS heatmap (
 
 CREATE TABLE IF NOT EXISTS outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, type TEXT, json TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 EVENT_TYPES = ("hazard", "remote_hazard", "movement")
@@ -94,6 +111,20 @@ class Storage:
         self._outbox_n = self._conn.execute("SELECT COUNT(*) FROM outbox").fetchone()[0]
         if self._outbox_n:
             print(f"[archivio] {self._outbox_n} messaggi ancora da inviare dalla sessione precedente")
+        self.db_id = self._load_db_id()
+
+    def _load_db_id(self):
+        """Identita' numerica di questo file di archivio (scritta alla creazione): va nel cursore di
+        export, cosi' il collettore si accorge se l'archivio e' stato ricreato. None se non leggibile."""
+        def op(c):
+            row = c.execute("SELECT value FROM meta WHERE key = 'db_id'").fetchone()
+            if row and str(row[0]).isdigit():
+                return int(row[0])
+            nuovo = 1 + secrets.randbelow(999_999_999)
+            c.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('db_id', ?)", (str(nuovo),))
+            return nuovo
+
+        return self._db("db_id", op, None)
 
     def _open(self):
         conn = sqlite3.connect(":memory:" if self.path is None else str(self.path),
@@ -232,6 +263,102 @@ class Storage:
         return [{"camera": r[0], "class": r[1], "cx": r[2], "cy": r[3], "count": r[4],
                  "cell": r[5], "unit": r[6]} for r in rows]
 
+    # ------------------------------------------------------------------ export (pull del collettore)
+
+    @staticmethod
+    def parse_cursor(cursor):
+        """Cursore -> ({lettera: rid}, db_id o None). Malformato o vuoto -> ({}, None) = dall'inizio.
+        Le tabelle che mancano nel cursore partono da 0; lettere sconosciute (tabelle future) ignorate."""
+        if not isinstance(cursor, str) or not cursor.strip() or len(cursor) > 200:
+            return {}, None
+        pos, db_id = {}, None
+        for tok in cursor.strip().split("."):
+            m = _CURSOR_TOKEN.fullmatch(tok.strip())
+            if m is None:
+                return {}, None
+            lettera, n = m.group(1), int(m.group(2))
+            if lettera == "d":
+                db_id = n
+            else:
+                pos[lettera] = n
+        return pos, db_id
+
+    def make_cursor(self, pos):
+        parts = [f"d{self.db_id}"] if self.db_id else []
+        parts += [f"{lettera}{max(0, _int(pos.get(lettera), 0))}" for _, lettera in EXPORT_TABLES]
+        return ".".join(parts)
+
+    def export(self, cursor=None, limit=500, max_bytes=EXPORT_MAX_BYTES):
+        """Elementi salvati dopo il cursore, in ordine di arrivo (ts, poi tabella, poi rid).
+
+        Ritorna {"cursor": nuovo cursore, "more": ci sono altri elementi, "items": [{"table", "rid",
+        "ts", "msg"}], "count", "reset": [tabelle ripartite da capo]} e, se l'archivio e' in errore,
+        "error" con lo stesso cursore (il collettore riprovera'). Per ogni tabella gli elementi
+        restituiti sono sempre i primi dopo il cursore (in ordine di rid), quindi il cursore nuovo
+        non salta mai nulla anche se i ts non sono in ordine. Mai eccezioni."""
+        limit = min(max(_int(limit, 500) or 1, 1), EXPORT_LIMIT_MAX)
+        max_bytes = max(1, _int(max_bytes, EXPORT_MAX_BYTES) or EXPORT_MAX_BYTES)
+        pos, db_id = self.parse_cursor(cursor)
+        reset_all = bool(pos) and db_id is not None and self.db_id is not None and db_id != self.db_id
+        if reset_all:  # cursore di un altro archivio (file ricreato): riparto dall'inizio
+            pos = {}
+        skip = ",".join("?" * len(EXPORT_SKIP_TYPES))
+
+        def filtro(table):
+            if table == "messages":  # niente scene: una al secondo riempirebbe ogni pagina
+                return f" AND type NOT IN ({skip})", list(EXPORT_SKIP_TYPES)
+            return "", []
+
+        def op(c):
+            reset = [t for t, _ in EXPORT_TABLES] if reset_all else []
+            heads = []  # [tabella, lettera, dopo, righe [(rid, ts, byte)], prossima riga da prendere]
+            for table, lettera in EXPORT_TABLES:
+                dopo = max(0, _int(pos.get(lettera), 0))
+                top = c.execute(f"SELECT MAX(rid) FROM {table}").fetchone()[0] or 0
+                if dopo > top:  # tabella svuotata dalla pulizia o archivio diverso: riparto da capo
+                    if table not in reset:
+                        reset.append(table)
+                    dopo = 0
+                extra, args = filtro(table)
+                righe = c.execute(f"SELECT rid, ts, length(json) FROM {table} WHERE rid > ?{extra}"
+                                  f" ORDER BY rid LIMIT ?", [dopo] + args + [limit + 1]).fetchall()
+                heads.append([table, lettera, dopo, righe, 0])
+            # fusione per ts delle teste delle tabelle: ogni tabella resta in ordine di rid
+            ordine, totale = [], 0
+            while len(ordine) < limit:
+                cand = [(h[3][h[4]][1] or 0, k) for k, h in enumerate(heads) if h[4] < len(h[3])]
+                if not cand:
+                    break
+                h = heads[min(cand)[1]]
+                rid, ts, nbyte = h[3][h[4]]
+                if ordine and totale + (nbyte or 0) > max_bytes:
+                    break  # pagina piena: il resto alla prossima richiesta
+                totale += nbyte or 0
+                ordine.append((h[0], rid, ts or 0))
+                h[4] += 1
+            more = any(h[4] < len(h[3]) for h in heads)
+            testi, nuovo = {}, {}
+            for table, lettera, dopo, righe, preso in heads:
+                nuovo[lettera] = righe[preso - 1][0] if preso else dopo
+                if preso:
+                    extra, args = filtro(table)
+                    for rid, text in c.execute(f"SELECT rid, json FROM {table} WHERE rid > ? AND rid <= ?{extra}",
+                                               [dopo, nuovo[lettera]] + args):
+                        testi[(table, rid)] = text
+            items = []
+            for table, rid, ts in ordine:
+                msg = self._loads(testi.get((table, rid)))
+                if msg is not None:  # riga illeggibile: la salto ma il cursore va avanti
+                    items.append({"table": table, "rid": rid, "ts": ts, "msg": msg})
+            return {"cursor": self.make_cursor(nuovo), "more": more, "items": items, "count": len(items),
+                    "reset": reset}
+
+        res = self._db("export", op, None)
+        if res is None:
+            return {"cursor": cursor if isinstance(cursor, str) else "", "more": False, "items": [],
+                    "count": 0, "reset": [], "error": "archivio non leggibile, riprova"}
+        return res
+
     def _loads(self, text):
         try:
             return json.loads(text)
@@ -321,7 +448,10 @@ class Storage:
         cutoff = int((now_s - days * 86400) * 1000)
 
         def op(c):
-            return sum(max(c.execute(f"DELETE FROM {t} WHERE ts < ?", (cutoff,)).rowcount, 0) for t in TABLES)
+            # l'ultima riga di ogni tabella resta: cosi' i rid non ripartono da 1 e i cursori di
+            # export del collettore restano validi anche dopo una pulizia che svuoterebbe la tabella
+            return sum(max(c.execute(f"DELETE FROM {t} WHERE ts < ? AND rid < (SELECT MAX(rid) FROM {t})",
+                                     (cutoff,)).rowcount, 0) for t in TABLES)
 
         tolti = self._db("cleanup", op, 0)
         if tolti:

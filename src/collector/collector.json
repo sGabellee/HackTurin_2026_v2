@@ -1,0 +1,15 @@
+{
+  "_note": "Esempio. nodes = indirizzo dell'API locale di ogni nodo (config del nodo: api.enabled, porta 8100). Con il simulatore di citta' gli indirizzi sono del tipo http://127.0.0.1:<porta>/n/<node_id>. pull.mode: manual (pulsante 'Scarica ora' o POST /api/pull) oppure interval. listen.udp: ascolto passivo del multicast SC-P2P (non trasmette mai); listen.serial: porta di un ESP32 radio (es. /dev/ttyUSB0 o COM5), vuoto = spento.",
+  "title": "CROSS Torino",
+  "topology": "../node/python/topology.json",
+  "nodes": {
+    "incrocio-1": "http://192.168.1.50:8100",
+    "incrocio-2": "http://192.168.1.51:8100"
+  },
+  "pull": {"mode": "manual", "interval_s": 600, "timeout_s": 4, "page_limit": 1000, "max_pages": 200, "workers": 8},
+  "listen": {"udp": true, "serial": "", "baud": 115200, "group": "239.255.42.99", "port": 47999, "key": ""},
+  "db": "collector.db",
+  "stale_s": 120,
+  "tag_timeout_s": 10,
+  "retention_days": 0
+}

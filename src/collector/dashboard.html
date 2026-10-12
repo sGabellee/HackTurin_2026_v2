@@ -1,0 +1,1106 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CROSS Torino</title>
+<!--
+  Dashboard locale del collettore CROSS v2 (ARCHITETTURA.md §5.3). Servita da collector.py su "/".
+  Una sola pagina, una sola colonna, nessuna risorsa esterna e nessuna libreria: funziona offline.
+  Legge solo le API del collettore (/api/overview, /api/map, /api/hazards, /api/crosswalks,
+  /api/users, /api/energy, /api/nodes, /api/pull, /api/events) ogni 2 s, e si ferma quando la
+  pagina non e' visibile.
+-->
+<style>
+:root {
+  --ink: #131a33;
+  --paper: #ffffff;
+  --blue: #1c3faa;
+  --red: #d42a3c;
+  --orange: #e8780c;
+  --gray: #9aa2b3;
+  --muted: #5b6380;
+  --line: #dde1ea;
+  --soft: #f3f5f9;
+  --street: #c3c9d6;
+  --wrap: 1100px;
+}
+*, *::before, *::after { box-sizing: border-box; border-radius: 0 !important; box-shadow: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: "Titillium Web", system-ui, sans-serif; font-size: 17px; line-height: 1.5;
+}
+a { color: var(--blue); }
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 20px; }
+.lab {
+  font-size: 11.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+}
+.num { font-weight: 300; font-variant-numeric: tabular-nums; line-height: 1; }
+button, select {
+  -webkit-appearance: none; appearance: none; font: inherit; color: var(--ink); background: var(--paper);
+  border: 1.5px solid var(--ink); padding: 7px 14px; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; white-space: nowrap;
+}
+button:hover:not([disabled]) { background: var(--ink); color: var(--paper); }
+button[disabled] { opacity: .45; cursor: default; }
+button.primary { background: var(--blue); border-color: var(--blue); color: var(--paper); }
+button.primary:hover:not([disabled]) { background: var(--ink); border-color: var(--ink); }
+select { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 16px; width: 100%; max-width: 520px;
+  padding-right: 34px; background-image: linear-gradient(45deg, transparent 50%, var(--ink) 50%),
+  linear-gradient(135deg, var(--ink) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 55%, calc(100% - 12px) 55%; background-size: 6px 6px; background-repeat: no-repeat; }
+:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+/* ------------------------------------------------------------ testata */
+.mast { background: var(--ink); color: var(--paper); padding: 0 0 34px; }
+.mast .lab { color: rgba(255,255,255,.66); }
+.topbar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 22px; padding: 16px 0 14px;
+  border-bottom: 1px solid rgba(255,255,255,.18); }
+.brand { font-weight: 700; letter-spacing: .2em; font-size: 15px; }
+.brand i { font-style: normal; display: inline-block; width: 18px; height: 8px; margin-right: 10px;
+  background: linear-gradient(90deg, #4f74e8 50%, var(--red) 50%); vertical-align: 1px; }
+.topbar nav { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.topbar nav a { color: rgba(255,255,255,.8); text-decoration: none; font-size: 12px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; }
+.topbar nav a:hover { color: #fff; text-decoration: underline; }
+.kicker { margin: 34px 0 6px; }
+.mast h1 { margin: 0; font-size: clamp(34px, 6vw, 56px); line-height: 1.05; font-weight: 700; letter-spacing: -.01em; }
+.lede { max-width: 760px; margin: 14px 0 0; color: rgba(255,255,255,.84); font-size: 18px; }
+.meta { margin: 14px 0 0; font-size: 14px; color: rgba(255,255,255,.7); }
+.meta b { color: #fff; font-weight: 600; }
+.meta .bad { color: #ff9aa5; }
+.figures { list-style: none; margin: 30px 0 0; padding: 0; display: flex; flex-wrap: wrap;
+  border-top: 1px solid rgba(255,255,255,.25); }
+.figures li { flex: 1 1 150px; padding: 18px 18px 0 0; min-width: 0; }
+.figures .num { display: block; font-size: clamp(40px, 6vw, 60px); margin-bottom: 8px; }
+.figures .num small { font-size: .42em; font-weight: 400; margin-left: 4px; }
+
+/* ------------------------------------------------------------ sezioni */
+section { padding-top: 8px; }
+.sec { display: flex; align-items: center; gap: 12px; margin: 56px 0 6px; padding-top: 14px;
+  border-top: 6px solid var(--blue); font-size: clamp(24px, 3.4vw, 30px); line-height: 1.15; font-weight: 700; }
+.sec .mark { flex: none; width: 22px; height: 10px; background: linear-gradient(90deg, var(--blue) 50%, var(--red) 50%); }
+.guide { margin: 4px 0 18px; max-width: 780px; color: var(--muted); }
+.sub { margin: 30px 0 8px; padding-top: 10px; border-top: 2px solid var(--ink); }
+.empty { margin: 8px 0; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); }
+.row-figs { list-style: none; margin: 4px 0 6px; padding: 0; display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); }
+.row-figs li { flex: 1 1 140px; padding: 14px 16px 12px 0; }
+.row-figs .num { display: block; font-size: 44px; margin-bottom: 6px; }
+.row-figs .num small { font-size: .45em; font-weight: 400; margin-left: 3px; }
+
+/* tabelle a tutta larghezza (sul telefono ogni riga diventa un blocco) */
+table.rows { width: 100%; border-collapse: collapse; font-size: 15.5px; }
+table.rows th { text-align: left; padding: 8px 10px 8px 0; border-bottom: 2px solid var(--ink); white-space: nowrap; }
+table.rows td { padding: 10px 10px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.rows td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.rows tr.is-stale td { color: var(--muted); }
+table.rows tr.clickable { cursor: pointer; }
+table.rows tr.clickable:hover td { background: var(--soft); }
+.sev { display: inline-block; width: 10px; height: 10px; margin-right: 8px; vertical-align: 0; background: var(--gray); }
+.sev.s2 { background: var(--orange); } .sev.s3 { background: var(--red); } .sev.em { background: var(--orange); outline: 2px solid var(--red); outline-offset: 1px; }
+.pill { display: inline-block; padding: 1px 7px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  border: 1.5px solid currentColor; white-space: nowrap; }
+.pill.ok { color: #1d7a46; } .pill.ko { color: var(--red); } .pill.run { color: var(--blue); } .pill.dim { color: var(--muted); }
+.st-sleep { color: #6c7489; } .st-awake { color: var(--blue); } .st-hazard { color: var(--red); }
+.st-emergency { color: var(--orange); } .st-nodata { color: var(--muted); }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; overflow-wrap: break-word; }
+.muted { color: var(--muted); }
+
+/* barre orizzontali */
+.bars { list-style: none; margin: 0; padding: 0; }
+.bars li { padding: 10px 0 12px; border-bottom: 1px solid var(--line); }
+.bars .line { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.bars .val { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.bar { height: 8px; margin-top: 6px; background: var(--soft); }
+.bar > i { display: block; height: 100%; background: var(--blue); }
+.bar.red > i { background: var(--red); } .bar.gray > i { background: var(--gray); }
+
+/* registro */
+.log { list-style: none; margin: 0; padding: 0; }
+.log li { display: flex; flex-wrap: wrap; gap: 2px 14px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.log .when { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 74px; }
+.log .what { flex: 1 1 320px; min-width: 0; }
+.log .src { color: var(--muted); font-size: 13px; }
+
+/* mappa */
+.mapbox { position: relative; border: 1.5px solid var(--ink); background: var(--paper); }
+#map { display: block; width: 100%; height: clamp(320px, 64vw, 620px); touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+#map.dragging { cursor: grabbing; }
+.mapctl { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; align-items: center; }
+.mapctl .grow { flex: 1 1 240px; }
+.mapnote { position: absolute; left: 0; right: 0; top: 0; padding: 14px 16px; background: rgba(255,255,255,.92);
+  border-bottom: 1px solid var(--line); font-size: 15px; }
+.streets { fill: none; stroke: var(--street); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.n .dot { stroke: var(--paper); stroke-width: 1.4; }
+.n.sleep .dot { fill: var(--gray); }
+.n.awake .dot { fill: var(--blue); }
+.n.hazard .dot { fill: var(--red); }
+.n.emergency .dot { fill: var(--orange); }
+.n.nodata .dot { fill: var(--paper); stroke: #8a92a6; stroke-width: 1.6; }
+.n.stale .dot { opacity: .45; }
+.n .hit { fill: transparent; }
+.n .halo { fill: none; stroke-width: 2; opacity: 0; }
+.n.hazard .halo { stroke: var(--red); animation: pulse 1.6s ease-out infinite; }
+.n.emergency .halo { stroke: var(--orange); animation: pulse 1s ease-out infinite; }
+.n.sel .ring { fill: none; stroke: var(--ink); stroke-width: 2; }
+.n .ring { fill: none; stroke: none; }
+.n .name { font-size: 13px; font-weight: 700; fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; stroke-linejoin: round; }
+@keyframes pulse { 0% { opacity: .9; } 100% { opacity: 0; } }
+.route-base { fill: none; stroke-width: 2; stroke-dasharray: 2 5; opacity: .55; vector-effect: non-scaling-stroke; stroke-linecap: round; }
+.route-draw { fill: none; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.route.hz .route-base, .route.hz .route-draw { stroke: var(--red); }
+.route.em .route-base, .route.em .route-draw { stroke: var(--orange); }
+.route .head { stroke: var(--paper); stroke-width: 1.5; }
+.route.hz .head { fill: var(--red); } .route.em .head { fill: var(--orange); }
+.tagmark { fill: var(--ink); stroke: var(--paper); stroke-width: 1; }
+.tagmark.r-emergency { fill: var(--orange); }
+.tagmark.r-blind { fill: #f2c200; stroke: var(--ink); }
+.legend { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 14px; color: var(--muted); }
+.legend svg { vertical-align: -3px; margin-right: 6px; }
+
+/* scheda dell'incrocio */
+.card { margin: 22px 0 0; border-top: 6px solid var(--ink); padding-top: 14px; }
+.card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.card-head h3 { margin: 0; font-size: 28px; line-height: 1.15; flex: 1 1 300px; }
+.kv { margin: 14px 0 0; padding: 0; }
+.kv > div { padding: 10px 0 12px; border-bottom: 1px solid var(--line); }
+.kv dt { margin: 0 0 2px; }
+.kv dd { margin: 0; }
+.kv ul { margin: 2px 0 0; padding-left: 18px; }
+
+footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink); font-size: 14px; color: var(--muted); }
+
+@media (max-width: 680px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 16px; }
+  .figures li { flex-basis: 44%; }
+  .row-figs li { flex-basis: 44%; }
+  .row-figs .num { font-size: 36px; }
+  table.rows thead { display: none; }
+  table.rows, table.rows tbody, table.rows tr, table.rows td { display: block; width: 100%; }
+  table.rows tr { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  table.rows td { border: 0; padding: 2px 0; display: flex; justify-content: space-between; gap: 14px; text-align: right; }
+  table.rows td::before { content: attr(data-l); font-size: 11px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted); text-align: left; padding-top: 3px; flex: none; }
+  table.rows td.first { display: block; text-align: left; font-weight: 700; }
+  table.rows td.first::before { content: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .n .halo { animation: none !important; opacity: .7; }
+}
+</style>
+</head>
+<body>
+<header class="mast">
+  <div class="wrap">
+    <div class="topbar">
+      <span class="brand"><i></i>CROSS</span>
+      <nav aria-label="Sezioni">
+        <a href="#mappa">Mappa</a><a href="#pericoli">Pericoli</a><a href="#attraversamenti">Attraversamenti</a>
+        <a href="#utenti">Utenti</a><a href="#energia">Energia</a><a href="#raccolta">Raccolta dati</a><a href="#registro">Registro</a>
+      </nav>
+    </div>
+    <p class="kicker lab">Rete degli incroci · offline, peer-to-peer</p>
+    <h1 id="title">CROSS Torino</h1>
+    <p class="lede">Ogni incrocio lavora da solo, resta a riposo finché un sensore non lo sveglia e parla
+      via radio con gli incroci vicini e con i Tag di chi è in strada. Questa pagina mostra quello che il
+      collettore ha scaricato dai nodi e quello che sente passare in radio.</p>
+    <p class="meta" id="meta">Collegamento al collettore in corso…</p>
+    <ul class="figures" aria-label="Numeri principali">
+      <li><span class="num" id="f-nodes">–</span><span class="lab">incroci</span></li>
+      <li><span class="num" id="f-awake">–</span><span class="lab">svegli ora</span></li>
+      <li><span class="num" id="f-asleep">–</span><span class="lab">a riposo</span></li>
+      <li><span class="num" id="f-haz">–</span><span class="lab">pericoli in corso</span></li>
+      <li><span class="num" id="f-tags">–</span><span class="lab">Tag in strada</span></li>
+      <li><span class="num" id="f-saved">–</span><span class="lab" id="f-saved-l">energia risparmiata</span></li>
+    </ul>
+  </div>
+</header>
+
+<main class="wrap">
+  <section id="mappa" aria-labelledby="h-map">
+    <h2 class="sec" id="h-map"><span class="mark"></span>Mappa della città</h2>
+    <p class="guide">Ogni punto è un incrocio: grigio a riposo, blu sveglio, rosso con un pericolo, arancione con un
+      mezzo di soccorso in arrivo, vuoto se non sono arrivati dati. Le linee rosse e arancioni seguono, tratto per
+      tratto, la strada fatta da un avviso; i piccoli segni intorno a un incrocio sono i Tag vicini. Rotellina o due
+      dita per lo zoom, trascina per spostarti, tocca un incrocio per aprirne la scheda.</p>
+    <div class="mapbox">
+      <svg id="map" role="img" aria-label="Mappa degli incroci" xmlns="http://www.w3.org/2000/svg">
+        <path class="streets" id="streets" d=""></path>
+        <g id="routes"></g>
+        <g id="nodes"></g>
+        <g id="tags"></g>
+      </svg>
+      <div class="mapnote" id="mapnote" hidden></div>
+    </div>
+    <div class="mapctl">
+      <button type="button" id="zin" aria-label="Avvicina">+</button>
+      <button type="button" id="zout" aria-label="Allontana">−</button>
+      <button type="button" id="zfit">Tutta la città</button>
+      <span class="grow"></span>
+    </div>
+    <ul class="legend" aria-label="Legenda">
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#9aa2b3"/></svg>a riposo</li>
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#1c3faa"/></svg>sveglio</li>
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#d42a3c"/></svg>pericolo</li>
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#e8780c"/></svg>soccorso</li>
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="4.5" fill="#fff" stroke="#8a92a6" stroke-width="1.6"/></svg>nessun dato</li>
+      <li><svg width="12" height="12"><circle cx="6" cy="6" r="5" fill="#1c3faa" opacity=".45"/></svg>dato vecchio</li>
+      <li><svg width="12" height="12"><rect x="2.5" y="2.5" width="7" height="7" fill="#131a33"/></svg>Tag vicino</li>
+    </ul>
+    <p style="margin:18px 0 6px"><label class="lab" for="pick">Apri la scheda di un incrocio</label></p>
+    <select id="pick"><option value="">Scegli un incrocio…</option></select>
+    <div id="card" class="card" hidden aria-live="polite"></div>
+  </section>
+
+  <section id="pericoli" aria-labelledby="h-haz">
+    <h2 class="sec" id="h-haz"><span class="mark"></span>Pericoli in corso</h2>
+    <p class="guide">Gli avvisi ancora validi, dal più grave. Ogni avviso nasce in un incrocio e viaggia via radio verso
+      gli incroci che incontrerà chi è in strada, senza passare da nessun server.</p>
+    <div id="haz"></div>
+  </section>
+
+  <section id="attraversamenti" aria-labelledby="h-cross">
+    <h2 class="sec" id="h-cross"><span class="mark"></span>Attraversamenti</h2>
+    <p class="guide">Lo stato delle strisce e della luce che le illumina. La luce si accende quando qualcuno sta per
+      attraversare e lampeggia più forte se un veicolo si avvicina; «via libera» solo se la camera è sveglia e
+      nessun veicolo arriva.</p>
+    <ul class="row-figs" id="cross-figs"></ul>
+    <div id="cross"></div>
+  </section>
+
+  <section id="utenti" aria-labelledby="h-users">
+    <h2 class="sec" id="h-users"><span class="mark"></span>Utenti della strada</h2>
+    <p class="guide">I CROSS Tag in strada adesso, per ruolo, e gli avvisi che gli incroci stanno mandando: vibrazioni,
+      suoni e luci diversi per pedoni, non vedenti, ciclisti, conducenti e mezzi di soccorso.</p>
+    <ul class="row-figs" id="user-figs"></ul>
+    <h3 class="sub lab">Tag in strada</h3>
+    <div id="tags-list"></div>
+    <h3 class="sub lab">Avvisi in corso</h3>
+    <div id="adv-list"></div>
+    <h3 class="sub lab">Avvisi dati nell'ultima ora</h3>
+    <div id="adv-counts"></div>
+    <h3 class="sub lab">Visti dalle camere nelle ultime 24 ore</h3>
+    <div id="seen"></div>
+  </section>
+
+  <section id="energia" aria-labelledby="h-energy">
+    <h2 class="sec" id="h-energy"><span class="mark"></span>Energia</h2>
+    <p class="guide">Un incrocio a riposo tiene ferme camera e intelligenza artificiale e ascolta solo la radio. Si
+      sveglia quando il sensore sul bordo delle strisce vede qualcuno, quando arriva un Tag o un avviso da un vicino.</p>
+    <ul class="row-figs" id="energy-figs"></ul>
+    <h3 class="sub lab">Risvegli per sorgente</h3>
+    <div id="wake"></div>
+    <h3 class="sub lab">Tempo a riposo per incrocio</h3>
+    <div id="energy-nodes"></div>
+  </section>
+
+  <section id="raccolta" aria-labelledby="h-pull">
+    <h2 class="sec" id="h-pull"><span class="mark"></span>Raccolta dati</h2>
+    <p class="guide">Il collettore è secondario: nessun nodo gli manda niente da solo. Quando serve va a chiedere i dati
+      a ogni incrocio e scarica solo quello che non ha ancora.</p>
+    <p id="pull-mode" style="margin:0 0 14px"></p>
+    <p style="margin:0 0 18px"><button type="button" class="primary" id="pull-all">Scarica ora da tutti</button></p>
+    <div id="pull-table"></div>
+    <h3 class="sub lab">Ascolto radio</h3>
+    <p id="radio" style="margin:6px 0"></p>
+    <h3 class="sub lab">Ultimi pull</h3>
+    <div id="pull-hist"></div>
+  </section>
+
+  <section id="registro" aria-labelledby="h-log">
+    <h2 class="sec" id="h-log"><span class="mark"></span>Registro eventi</h2>
+    <p class="guide">Tutto quello che è successo, dal più recente: pericoli visti dagli incroci, avvisi ricevuti dai
+      vicini, guasti. «radio» = sentito in diretta, «pull» = scaricato dal nodo.</p>
+    <ol class="log" id="log"></ol>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p style="margin:0">CROSS v2 — collettore locale. Nessuna risorsa esterna: la pagina funziona senza internet.
+      Mappa: <span id="map-src">dati © OpenStreetMap contributors (ODbL)</span>.</p>
+  </div>
+</footer>
+
+<script>
+'use strict';
+(function () {
+  // ------------------------------------------------------------------ testi
+  var KINDS = {
+    emergency_vehicle: 'Mezzo di soccorso', speeding: 'Eccesso di velocità', sudden_acceleration: 'Accelerazione brusca',
+    harsh_braking: 'Frenata brusca', solid_line_crossing: 'Linea continua superata', wrong_way: 'Veicolo contromano',
+    u_turn: 'Inversione a U', forbidden_movement: 'Manovra vietata', bike_lane_invasion: 'Auto nella ciclabile',
+    bike_lane_hotspot: 'Ciclabile spesso invasa', illegal_stop: 'Sosta vietata', congestion: 'Coda',
+    pedestrian_not_yielded: 'Precedenza negata al pedone', near_miss: 'Quasi incidente', collision_risk: 'Rischio di collisione',
+    close_pass: 'Sorpasso stretto del ciclista', pedestrian_outside_crosswalk: 'Pedone fuori dalle strisce',
+    slow_pedestrian: 'Pedone lento sulle strisce', pedestrian_waiting: 'Pedone in attesa', crowd_on_crosswalk: 'Folla sulle strisce',
+    cyclist_on_sidewalk: 'Ciclista sul marciapiede', red_light_violation: 'Passaggio col rosso', late_yellow: 'Giallo tardivo',
+    pedestrian_red_crossing: 'Pedone col rosso', crossing_conflict: 'Conflitto sulle strisce',
+    assisted_crossing: 'Attraversamento assistito', emergency_corridor: 'Corridoio di soccorso',
+    wake_sensor_fault: 'Sensore di risveglio guasto'
+  };
+  var CATEGORY = { emergency: 'emergenza', violation: 'infrazione', risk: 'rischio', info: 'informazione' };
+  var ROLES = { pedestrian: 'Pedoni', blind: 'Non vedenti', cyclist: 'Ciclisti', driver: 'Conducenti', emergency: 'Soccorso' };
+  var ROLE1 = { pedestrian: 'pedone', blind: 'non vedente', cyclist: 'ciclista', driver: 'conducente', emergency: 'soccorso' };
+  var NODE_STATE = { sleep: 'a riposo', awake: 'sveglio', hazard: 'pericolo in corso', emergency: 'soccorso in arrivo', nodata: 'nessun dato' };
+  var POWER = { sleep: 'a riposo', active: 'sveglio', cooldown: 'sta per riposare' };
+  var XSTATE = { emergency: 'Soccorso in arrivo', conflict: 'Conflitto', attention: 'Attenzione', assist: 'Assistito',
+    unknown: 'Prudenza: camera non pronta', occupied: 'Qualcuno attraversa', idle: 'Libero' };
+  var LIGHT = { off: 'spenta', on: 'accesa', attention: 'lampeggio lento', danger: 'lampeggio veloce', assist: 'respiro',
+    emergency: 'doppio lampo', unknown: 'prudenza' };
+  var ADVICE = { CLEAR: 'Niente da segnalare', WAIT: 'Aspetta, non attraversare', CROSS_OK: 'Puoi attraversare',
+    KEEP_GOING: 'Sei sulle strisce: continua', VEHICLE_LEFT: 'Veicolo in arrivo da sinistra', VEHICLE_RIGHT: 'Veicolo in arrivo da destra',
+    PEDESTRIAN_AHEAD: 'Pedoni all’incrocio', CYCLIST_AHEAD: 'Ciclisti all’incrocio', BIKE_LANE_BLOCKED: 'Ciclabile occupata',
+    EMERGENCY_APPROACHING: 'Arriva un mezzo di soccorso', CORRIDOR_CLEAR: 'Incrocio libero', CORRIDOR_BUSY: 'Incrocio occupato',
+    HAZARD_AHEAD: 'Pericolo più avanti', ASSIST_UNAVAILABLE: 'Assistenza non disponibile', WRONG_WAY: 'Veicolo contromano' };
+  var WAKE = { curb: 'Persona sul bordo delle strisce', radio_vru: 'Tag vicino', radio_emergency: 'Mezzo di soccorso',
+    radio_hazard: 'Avviso da un incrocio vicino', manual: 'A mano', schedule: 'Programmato', boot: 'Accensione',
+    sensor_fault: 'Sensore guasto: resta sveglio' };
+  var CLASSES = { person: 'Pedoni', cyclist: 'Ciclisti', vehicle: 'Veicoli', emergency: 'Mezzi di soccorso' };
+  var ACTION = { 'new': 'inizio', cancel: 'fine' };
+
+  // ------------------------------------------------------------------ utilità
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function num(v, d) {
+    if (v == null || typeof v !== 'number' || !isFinite(v)) return '–';
+    return v.toLocaleString('it-IT', { maximumFractionDigits: d == null ? 1 : d });
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function clock(ms) {
+    if (!ms) return '–';
+    var d = new Date(ms), now = new Date();
+    var t = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    return d.toDateString() === now.toDateString() ? t : pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + ' ' + t.slice(0, 5);
+  }
+  function ago(ms) {
+    if (!ms) return 'mai';
+    return agoS((Date.now() - ms) / 1000);
+  }
+  function agoS(s) {
+    if (s == null || !isFinite(s)) return '–';
+    if (s < 0) s = 0;
+    if (s < 60) return Math.round(s) + ' s fa';
+    if (s < 3600) return Math.round(s / 60) + ' min fa';
+    if (s < 86400) return Math.round(s / 3600) + ' h fa';
+    return Math.round(s / 86400) + ' g fa';
+  }
+  function dur(s) {
+    if (s == null || !isFinite(s)) return '–';
+    if (s < 60) return Math.round(s) + ' s';
+    if (s < 3600) return Math.round(s / 60) + ' min';
+    return num(s / 3600, 1) + ' h';
+  }
+  function plur(n, one, many) { return num(n || 0, 0) + ' ' + ((n || 0) === 1 ? one : many); }
+  function kindName(k) { return KINDS[k] || (k ? String(k).replace(/_/g, ' ') : 'evento'); }
+  function nodeName(id) { var n = S.nodeIndex[id]; return (n && n.name) || id || '–'; }
+  function wh(v) {
+    if (v == null || !isFinite(v)) return ['–', 'Wh'];
+    return Math.abs(v) >= 1000 ? [num(v / 1000, 2), 'kWh'] : [num(v, v < 10 ? 2 : 1), 'Wh'];
+  }
+  function sevClass(item) {
+    if (item.category === 'emergency') return 'sev em';
+    return 'sev s' + Math.max(1, Math.min(3, item.severity || 1));
+  }
+  function empty(text) { return '<p class="empty">' + esc(text) + '</p>'; }
+  function figs(list) {
+    return list.map(function (f) {
+      return '<li><span class="num">' + f[0] + (f[2] ? '<small>' + esc(f[2]) + '</small>' : '') +
+        '</span><span class="lab">' + esc(f[1]) + '</span></li>';
+    }).join('');
+  }
+  function table(cols, rows, opts) {
+    opts = opts || {};
+    var h = '<table class="rows"><thead><tr>' + cols.map(function (c) { return '<th class="lab">' + esc(c) + '</th>'; }).join('') +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr' + (r.cls ? ' class="' + r.cls + '"' : '') + (r.id ? ' data-node="' + esc(r.id) + '"' : '') + '>';
+      r.cells.forEach(function (c, i) {
+        h += '<td data-l="' + esc(cols[i]) + '"' + (i === 0 ? ' class="first"' : (r.numeric && r.numeric.indexOf(i) >= 0 ? ' class="n"' : '')) + '>' + c + '</td>';
+      });
+      h += '</tr>';
+    });
+    return h + '</tbody></table>';
+  }
+  function bars(list, max, color) {
+    if (!list.length) return '';
+    max = max || Math.max.apply(null, list.map(function (b) { return b.value || 0; })) || 1;
+    return '<ul class="bars">' + list.map(function (b) {
+      var w = Math.max(0, Math.min(100, 100 * (b.value || 0) / max));
+      return '<li><div class="line"><span>' + b.label + '</span><span class="val">' + b.text + '</span></div>' +
+        '<div class="bar ' + (b.color || color || '') + '"><i style="width:' + w.toFixed(1) + '%"></i></div></li>';
+    }).join('') + '</ul>';
+  }
+
+  // ------------------------------------------------------------------ stato
+  var S = {
+    overview: null, map: null, rev: null, hazards: [], cross: null, users: null, energy: null, nodes: [], pull: null,
+    events: [], lastSeq: null, selected: null, ok: false, lastOk: 0, nodeIndex: {}, cardEvents: [], busy: false,
+    pulling: {}
+  };
+
+  function getJSON(url, opt) {
+    return fetch(url, Object.assign({ cache: 'no-store' }, opt || {})).then(function (r) {
+      if (!r.ok && r.status !== 202) throw new Error(url + ' -> HTTP ' + r.status);
+      return r.json();
+    });
+  }
+
+  function refresh() {
+    if (S.busy) return Promise.resolve();
+    S.busy = true;
+    var needGeom = !S.map || !S.map.edges;
+    var evUrl = S.lastSeq == null ? '/api/events?limit=200' : '/api/events?after=' + S.lastSeq + '&limit=500';
+    var reqs = [getJSON('/api/overview'), getJSON('/api/map?geom=' + (needGeom ? 1 : 0)), getJSON('/api/hazards'),
+      getJSON('/api/crosswalks'), getJSON('/api/users'), getJSON('/api/energy'), getJSON('/api/nodes?known=1'),
+      getJSON('/api/pull'), getJSON(evUrl)];
+    if (S.selected) reqs.push(getJSON('/api/events?limit=12&node=' + encodeURIComponent(S.selected)));
+    return Promise.all(reqs).then(function (r) {
+      S.overview = r[0]; S.hazards = r[2].items || []; S.cross = r[3]; S.users = r[4]; S.energy = r[5];
+      S.nodes = r[6].nodes || []; S.pull = r[7];
+      var m = r[1];
+      if (!needGeom && S.map && m.rev !== S.map.rev) {   // topologia cambiata: riscarico la geometria
+        S.map = null;
+      } else {
+        if (!needGeom && S.map) m.edges = S.map.edges;
+        S.map = m;
+      }
+      S.nodeIndex = {};
+      (m.nodes || []).forEach(function (n) { S.nodeIndex[n.id] = n; });
+      S.nodes.forEach(function (n) { if (!S.nodeIndex[n.id]) S.nodeIndex[n.id] = n; });
+      var ev = r[8];
+      if (S.lastSeq == null) S.events = ev.items || [];
+      else S.events = S.events.concat(ev.items || []);
+      if (S.events.length > 400) S.events = S.events.slice(S.events.length - 400);
+      S.lastSeq = (ev.items && ev.items.length) ? ev.items[ev.items.length - 1].seq : (S.lastSeq == null ? ev.last : S.lastSeq);
+      if (S.selected && r[9]) S.cardEvents = r[9].items || [];
+      S.ok = true; S.lastOk = Date.now();
+    }).catch(function (e) {
+      S.ok = false;
+      if (window.console) console.warn('aggiornamento non riuscito:', e);
+    }).then(function () {
+      S.busy = false;
+      render();
+      if (S.ok && !S.map) return refresh();   // geometria da riscaricare subito
+    });
+  }
+
+  var timer = null;
+  function loop() {
+    clearTimeout(timer);
+    if (document.hidden) return;          // pagina nascosta: niente richieste (anche qui si risparmia)
+    refresh().then(function () { timer = setTimeout(loop, 2000); });
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) loop(); else clearTimeout(timer); });
+
+  // ------------------------------------------------------------------ render
+  function render() {
+    try { renderHead(); } catch (e) { console.error(e); }
+    try { renderMap(); } catch (e) { console.error(e); }
+    try { renderCard(); } catch (e) { console.error(e); }
+    try { renderHazards(); } catch (e) { console.error(e); }
+    try { renderCross(); } catch (e) { console.error(e); }
+    try { renderUsers(); } catch (e) { console.error(e); }
+    try { renderEnergy(); } catch (e) { console.error(e); }
+    try { renderPull(); } catch (e) { console.error(e); }
+    try { renderLog(); } catch (e) { console.error(e); }
+  }
+
+  function setNum(id, v) { var el = $(id); if (el.innerHTML !== v) el.innerHTML = v; }
+
+  function renderHead() {
+    var o = S.overview;
+    var meta = $('meta');
+    if (!o) { meta.innerHTML = S.ok ? '' : '<span class="bad">Collettore non raggiungibile: avvia collector.py e ricarica.</span>'; return; }
+    if (o.title) { $('title').textContent = o.title; document.title = o.title; }
+    var c = o.counts;
+    setNum('f-nodes', num(c.nodes, 0));
+    setNum('f-awake', num(c.awake, 0));
+    setNum('f-asleep', num(c.asleep, 0));
+    setNum('f-haz', num(c.hazards, 0));
+    setNum('f-tags', num(c.tags, 0));
+    var w = wh(o.energy.saved_wh);
+    setNum('f-saved', o.energy.nodes ? w[0] + '<small>' + w[1] + '</small>' : '–');
+    $('f-saved-l').textContent = o.energy.saved_pct != null ? 'energia risparmiata (' + num(o.energy.saved_pct, 0) + '%)' : 'energia risparmiata';
+    var bits = [];
+    bits.push(S.ok ? 'Aggiornato alle <b>' + clock(S.lastOk) + '</b>' :
+      '<span class="bad">Collettore non raggiungibile: dati fermi alle ' + clock(S.lastOk) + '</span>');
+    var L = o.listen;
+    bits.push(L.udp || L.serial ? 'radio in ascolto' + (L.last_rx_ms ? ', ultimo messaggio ' + ago(L.last_rx_ms) : ', ancora nessun messaggio')
+      : 'ascolto radio spento');
+    bits.push(o.pull.running && o.pull.running.length ? 'pull in corso (' + o.pull.running.length + ')' :
+      'ultimo pull ' + (o.pull.last_ms ? clock(o.pull.last_ms) : 'mai'));
+    if (c.stale) bits.push(c.stale + ' incroci con dati vecchi');
+    if (c.nodata) bits.push(c.nodata + ' senza dati');
+    meta.innerHTML = bits.join(' · ');
+  }
+
+  // ------------------------------------------------------------------ mappa
+  var M = {
+    svg: $('map'), streets: $('streets'), gRoutes: $('routes'), gNodes: $('nodes'), gTags: $('tags'),
+    vb: null, fit: null, P: null, rev: null, nodes: {}, markers: [], routes: [], routeKey: '', tagKey: '', anim: 0
+  };
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs, parent) {
+    var e = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function proj(lat, lon) { return [(lon - M.P.lon0) * M.P.kx, -(lat - M.P.lat0) * M.P.ky]; }
+  function size() { var r = M.svg.getBoundingClientRect(); return [Math.max(1, r.width), Math.max(1, r.height)]; }
+  function k() { return M.vb ? M.vb.w / size()[0] : 1; }       // unità della mappa per pixel
+  function applyView() {
+    var s = size();
+    M.vb.h = M.vb.w * s[1] / s[0];
+    M.svg.setAttribute('viewBox', [M.vb.x, M.vb.y, M.vb.w, M.vb.h].map(function (v) { return v.toFixed(2); }).join(' '));
+    var kk = k();
+    M.markers.forEach(function (m) { m.g.setAttribute('transform', 'translate(' + m.x.toFixed(2) + ' ' + m.y.toFixed(2) + ') scale(' + kk.toFixed(4) + ')'); });
+  }
+  function fitView() {
+    if (!M.fit) return;
+    var s = size(), f = M.fit, aspect = s[1] / s[0];
+    var w = f.w, h = f.h;
+    if (h / w > aspect) w = h / aspect;
+    M.vb = { x: f.x + f.w / 2 - w / 2, y: f.y + f.h / 2 - (w * aspect) / 2, w: w, h: w * aspect };
+    applyView();
+  }
+  function zoomAt(px, py, f) {
+    if (!M.vb || !M.fit) return;
+    var w = Math.max(40, Math.min(M.vb.w * f, Math.max(M.fit.w, M.fit.h) * 4));
+    f = w / M.vb.w;
+    M.vb.x = px - (px - M.vb.x) * f;
+    M.vb.y = py - (py - M.vb.y) * f;
+    M.vb.w = w;
+    applyView();
+  }
+  function toMap(cx, cy) {
+    var r = M.svg.getBoundingClientRect(), kk = k();
+    return [M.vb.x + (cx - r.left) * kk, M.vb.y + (cy - r.top) * kk];
+  }
+
+  function buildMap(m) {
+    M.rev = m.rev;
+    M.nodes = {}; M.markers = []; M.routes = []; M.routeKey = ''; M.tagKey = '';
+    M.gNodes.textContent = ''; M.gRoutes.textContent = ''; M.gTags.textContent = '';
+    var pts = [];
+    (m.nodes || []).forEach(function (n) { pts.push([n.lat, n.lon]); });
+    (m.edges || []).forEach(function (e) { e.g.forEach(function (p) { pts.push(p); }); });
+    var b = m.bbox;
+    if (!b && pts.length) {
+      b = [Infinity, Infinity, -Infinity, -Infinity];
+      pts.forEach(function (p) { b[0] = Math.min(b[0], p[0]); b[1] = Math.min(b[1], p[1]); b[2] = Math.max(b[2], p[0]); b[3] = Math.max(b[3], p[1]); });
+    }
+    if (!b) { M.P = null; M.fit = null; M.streets.setAttribute('d', ''); return; }
+    var lat0 = (b[0] + b[2]) / 2, lon0 = (b[1] + b[3]) / 2;
+    M.P = { lat0: lat0, lon0: lon0, ky: 111320, kx: 111320 * Math.cos(lat0 * Math.PI / 180) };
+    var a = proj(b[2], b[1]), c = proj(b[0], b[3]);
+    var w = Math.max(c[0] - a[0], 120), h = Math.max(c[1] - a[1], 120), pad = Math.max(w, h) * 0.06;
+    M.fit = { x: (a[0] + c[0]) / 2 - w / 2 - pad, y: (a[1] + c[1]) / 2 - h / 2 - pad, w: w + 2 * pad, h: h + 2 * pad };
+    var d = [];
+    (m.edges || []).forEach(function (e) {
+      e.g.forEach(function (p, i) { var q = proj(p[0], p[1]); d.push((i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1)); });
+    });
+    M.streets.setAttribute('d', d.join(''));
+    fitView();
+  }
+
+  function marker(parent, x, y, cls) {
+    var g = el('g', { 'class': cls }, parent);
+    var m = { g: g, x: x, y: y };
+    M.markers.push(m);
+    return m;
+  }
+
+  function syncNodes(m) {
+    var seen = {};
+    (m.nodes || []).forEach(function (n) {
+      seen[n.id] = true;
+      var e = M.nodes[n.id];
+      var q = proj(n.lat, n.lon);
+      if (!e) {
+        var mk = marker(M.gNodes, q[0], q[1], 'n');
+        mk.g.setAttribute('data-id', n.id);
+        el('circle', { 'class': 'halo', r: 11 }, mk.g);
+        el('circle', { 'class': 'ring', r: 8.5 }, mk.g);
+        el('circle', { 'class': 'dot', r: 5.2 }, mk.g);
+        el('circle', { 'class': 'hit', r: 13 }, mk.g);
+        mk.title = el('title', {}, mk.g);
+        mk.label = null;
+        e = M.nodes[n.id] = mk;
+      } else if (e.x !== q[0] || e.y !== q[1]) {
+        e.x = q[0]; e.y = q[1];
+      }
+      var cls = 'n ' + n.state + (n.stale ? ' stale' : '') + (S.selected === n.id ? ' sel' : '');
+      if (e.cls !== cls) { e.g.setAttribute('class', cls); e.cls = cls; }
+      var t = n.name + ' — ' + (NODE_STATE[n.state] || n.state) + (n.stale && n.state !== 'nodata' ? ' (dato di ' + agoS(n.age_s) + ')' : '') +
+        (n.hazard ? ' — ' + kindName(n.hazard) : '') + (n.tags ? ' — ' + n.tags + ' Tag vicini' : '');
+      if (e.title.textContent !== t) e.title.textContent = t;
+      var wantLabel = S.selected === n.id;
+      if (wantLabel && !e.label) {
+        e.label = el('text', { 'class': 'name', x: 12, y: -10 }, e.g);
+      }
+      if (e.label) {
+        if (wantLabel) e.label.textContent = n.name; else { e.g.removeChild(e.label); e.label = null; }
+      }
+    });
+    Object.keys(M.nodes).forEach(function (id) {
+      if (!seen[id]) {
+        var e = M.nodes[id];
+        e.g.parentNode && e.g.parentNode.removeChild(e.g);
+        M.markers = M.markers.filter(function (x) { return x !== e; });
+        delete M.nodes[id];
+      }
+    });
+    if (S.selected && M.nodes[S.selected]) M.gNodes.appendChild(M.nodes[S.selected].g);  // sopra gli altri
+  }
+
+  function syncTags() {
+    var tags = (S.users && S.users.tags) || [];
+    var byNode = {};
+    tags.forEach(function (t) { if (t.node && M.nodes[t.node]) (byNode[t.node] = byNode[t.node] || []).push(t); });
+    var key = JSON.stringify(Object.keys(byNode).sort().map(function (n) { return [n, byNode[n].map(function (t) { return t.device + t.role; })]; }));
+    if (key === M.tagKey) return;
+    M.tagKey = key;
+    M.markers = M.markers.filter(function (m) { return !m.tag; });
+    M.gTags.textContent = '';
+    Object.keys(byNode).forEach(function (nid) {
+      var base = M.nodes[nid], list = byNode[nid];
+      var mk = marker(M.gTags, base.x, base.y, 'tags');
+      mk.tag = true;
+      list.slice(0, 8).forEach(function (t, i) {
+        var ang = -Math.PI / 2 + i * (Math.PI * 2 / Math.min(8, list.length)) + Math.PI / 8;
+        var x = Math.cos(ang) * 14, y = Math.sin(ang) * 14, g, cls = 'tagmark r-' + (t.role || 'x');
+        if (t.role === 'cyclist') g = el('path', { d: 'M' + x + ' ' + (y - 4) + 'l4 7h-8z', 'class': cls }, mk.g);
+        else if (t.role === 'driver') g = el('rect', { x: x - 3.5, y: y - 3.5, width: 7, height: 7, 'class': cls }, mk.g);
+        else if (t.role === 'blind') g = el('path', { d: 'M' + x + ' ' + (y - 4.5) + 'l4.5 4.5l-4.5 4.5l-4.5-4.5z', 'class': cls }, mk.g);
+        else if (t.role === 'emergency') g = el('path', { d: 'M' + (x - 1.6) + ' ' + (y - 5) + 'h3.2v3.4h3.4v3.2h-3.4v3.4h-3.2v-3.4h-3.4v-3.2h3.4z', 'class': cls }, mk.g);
+        else g = el('rect', { x: x - 3, y: y - 3, width: 6, height: 6, 'class': cls }, mk.g);
+        el('title', {}, g).textContent = 'Tag ' + t.device + ' — ' + (ROLE1[t.role] || 'ruolo sconosciuto');
+      });
+    });
+    applyView();
+  }
+
+  function syncRoutes() {
+    var key = S.hazards.map(function (h) { return h.key + ':' + (h.segments || []).length + ':' + h.category; }).join('|');
+    if (key === M.routeKey) return;
+    M.routeKey = key;
+    M.markers = M.markers.filter(function (m) { return !m.head; });
+    M.gRoutes.textContent = '';
+    M.routes = [];
+    S.hazards.forEach(function (h) {
+      if (!h.segments || !h.segments.length) return;
+      var g = el('g', { 'class': 'route ' + (h.category === 'emergency' ? 'em' : 'hz') }, M.gRoutes);
+      var segs = h.segments.map(function (s) {
+        var pts = s.g.map(function (p) { return proj(p[0], p[1]); }), len = [0];
+        for (var i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+        return { pts: pts, len: len };
+      });
+      var all = [];
+      segs.forEach(function (s, i) { s.pts.forEach(function (p, j) { all.push((i === 0 && j === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)); }); });
+      el('path', { 'class': 'route-base', d: all.join('') }, g);
+      var draw = el('path', { 'class': 'route-draw', d: '' }, g);
+      var head = marker(g, segs[0].pts[0][0], segs[0].pts[0][1], 'headg');
+      head.head = true;
+      el('circle', { 'class': 'head', r: 4.5 }, head.g);
+      el('title', {}, g).textContent = kindName(h.kind) + ' da ' + h.name;
+      M.routes.push({ segs: segs, draw: draw, head: head });
+    });
+    applyView();
+    if (M.routes.length && !M.anim) M.anim = requestAnimationFrame(animate);
+  }
+
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var lastFrame = 0;
+  function animate(t) {
+    M.anim = 0;
+    if (!M.routes.length || document.hidden) return;
+    if (t - lastFrame >= 33) {         // ~30 fotogrammi al secondo bastano
+      lastFrame = t;
+      var STEP = 700, PAUSE = 1200, kk = k();
+      M.routes.forEach(function (r) {
+        var n = r.segs.length, cycle = n * STEP + PAUSE;
+        var p = reduced ? n : Math.min(n, (t % cycle) / STEP);
+        var full = Math.floor(p), frac = p - full, d = [], last = null;
+        for (var i = 0; i < Math.min(full, n); i++) r.segs[i].pts.forEach(function (q) { d.push(q); });
+        if (full < n) {
+          var s = r.segs[full], L = s.len[s.len.length - 1] * frac;
+          d.push(s.pts[0]);
+          for (var j = 1; j < s.pts.length; j++) {
+            if (s.len[j] <= L) { d.push(s.pts[j]); continue; }
+            var u = (L - s.len[j - 1]) / Math.max(1e-6, s.len[j] - s.len[j - 1]);
+            d.push([s.pts[j - 1][0] + (s.pts[j][0] - s.pts[j - 1][0]) * u, s.pts[j - 1][1] + (s.pts[j][1] - s.pts[j - 1][1]) * u]);
+            break;
+          }
+        }
+        last = d.length ? d[d.length - 1] : r.segs[0].pts[0];
+        r.draw.setAttribute('d', d.length > 1 ? 'M' + d.map(function (q) { return q[0].toFixed(1) + ' ' + q[1].toFixed(1); }).join('L') : '');
+        r.head.x = last[0]; r.head.y = last[1];
+        r.head.g.setAttribute('transform', 'translate(' + last[0].toFixed(1) + ' ' + last[1].toFixed(1) + ') scale(' + kk.toFixed(4) + ')');
+      });
+    }
+    if (!reduced) M.anim = requestAnimationFrame(animate);
+  }
+
+  function renderMap() {
+    var m = S.map, note = $('mapnote');
+    if (!m) return;
+    if (m.rev !== M.rev || !M.P) buildMap(m);
+    if (!M.P) {
+      note.hidden = false;
+      note.textContent = 'Nessuna topologia caricata e nessun incrocio con coordinate: genera topology.json con ' +
+        'src/node/tools/build_topology.py (o indica il percorso in collector.json). Gli incroci restano elencati nelle sezioni qui sotto.';
+    } else if (!(m.nodes || []).length) {
+      note.hidden = false;
+      note.textContent = 'La mappa non ha incroci.';
+    } else note.hidden = true;
+    if (!M.P) return;
+    syncNodes(m);
+    syncTags();
+    syncRoutes();
+    if (m.source) $('map-src').textContent = /openstreetmap/i.test(m.source) ? 'dati © OpenStreetMap contributors (ODbL)' : m.source;
+    var pick = $('pick'), ids = Object.keys(S.nodeIndex).sort(function (a, b) { return nodeName(a).localeCompare(nodeName(b), 'it'); });
+    var sig = ids.join('|');
+    if (pick.dataset.sig !== sig) {
+      pick.dataset.sig = sig;
+      pick.innerHTML = '<option value="">Scegli un incrocio…</option>' + ids.map(function (id) {
+        return '<option value="' + esc(id) + '">' + esc(nodeName(id)) + (nodeName(id) !== id ? ' (' + esc(id) + ')' : '') + '</option>';
+      }).join('');
+    }
+    if (pick.value !== (S.selected || '')) pick.value = S.selected || '';
+  }
+
+  // interazione: rotellina, trascinamento, due dita, clic
+  var ptrs = {}, drag = null;
+  M.svg.addEventListener('wheel', function (e) {
+    if (!M.vb) return;
+    e.preventDefault();
+    var p = toMap(e.clientX, e.clientY);
+    zoomAt(p[0], p[1], Math.exp((e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY) * 0.0015));
+  }, { passive: false });
+  M.svg.addEventListener('pointerdown', function (e) {
+    if (!M.vb) return;
+    try { M.svg.setPointerCapture(e.pointerId); } catch (x) { /* niente */ }
+    ptrs[e.pointerId] = [e.clientX, e.clientY];
+    var hit = e.target.closest ? e.target.closest('[data-id]') : null;
+    if (Object.keys(ptrs).length === 1) drag = { moved: 0, hit: hit ? hit.getAttribute('data-id') : null };
+    else if (drag) drag.moved = 99;
+    M.svg.classList.add('dragging');
+  });
+  M.svg.addEventListener('pointermove', function (e) {
+    if (!ptrs[e.pointerId] || !M.vb) return;
+    var prev = ptrs[e.pointerId], cur = [e.clientX, e.clientY], ids = Object.keys(ptrs);
+    if (ids.length === 1) {
+      var kk = k();
+      M.vb.x -= (cur[0] - prev[0]) * kk; M.vb.y -= (cur[1] - prev[1]) * kk;
+      if (drag) drag.moved += Math.abs(cur[0] - prev[0]) + Math.abs(cur[1] - prev[1]);
+      ptrs[e.pointerId] = cur;
+      applyView();
+    } else if (ids.length === 2) {
+      var other = ptrs[ids[0] == e.pointerId ? ids[1] : ids[0]];
+      var d0 = Math.hypot(prev[0] - other[0], prev[1] - other[1]), d1 = Math.hypot(cur[0] - other[0], cur[1] - other[1]);
+      ptrs[e.pointerId] = cur;
+      if (d0 > 0 && d1 > 0) {
+        var mid = toMap((cur[0] + other[0]) / 2, (cur[1] + other[1]) / 2);
+        zoomAt(mid[0], mid[1], d0 / d1);
+      }
+    }
+  });
+  function endPtr(e) {
+    if (!ptrs[e.pointerId]) return;
+    delete ptrs[e.pointerId];
+    if (!Object.keys(ptrs).length) {
+      M.svg.classList.remove('dragging');
+      if (drag && drag.moved < 6 && drag.hit && e.type === 'pointerup') select(drag.hit, true);
+      drag = null;
+    }
+  }
+  M.svg.addEventListener('pointerup', endPtr);
+  M.svg.addEventListener('pointercancel', endPtr);
+  $('zin').addEventListener('click', function () { if (M.vb) zoomAt(M.vb.x + M.vb.w / 2, M.vb.y + M.vb.h / 2, 1 / 1.6); });
+  $('zout').addEventListener('click', function () { if (M.vb) zoomAt(M.vb.x + M.vb.w / 2, M.vb.y + M.vb.h / 2, 1.6); });
+  $('zfit').addEventListener('click', fitView);
+  window.addEventListener('resize', function () { if (M.vb) applyView(); });
+  $('pick').addEventListener('change', function () { select(this.value || null, false); });
+
+  function select(id, fromMap) {
+    S.selected = id || null;
+    S.cardEvents = [];
+    if (S.map) syncNodes(S.map);
+    renderCard();
+    if (id && !fromMap && M.nodes[id] && M.vb) {   // scelto dall'elenco: porto l'incrocio al centro
+      M.vb.x = M.nodes[id].x - M.vb.w / 2; M.vb.y = M.nodes[id].y - M.vb.h / 2; applyView();
+    }
+    if (id) {
+      getJSON('/api/events?limit=12&node=' + encodeURIComponent(id)).then(function (r) {
+        if (S.selected === id) { S.cardEvents = r.items || []; renderCard(); }
+      }).catch(function () { /* al prossimo giro */ });
+      if (fromMap) $('card').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'nearest' });
+    }
+  }
+
+  // ------------------------------------------------------------------ scheda dell'incrocio
+  function findNode(id) {
+    for (var i = 0; i < S.nodes.length; i++) if (S.nodes[i].id === id) return S.nodes[i];
+    return null;
+  }
+  function renderCard() {
+    var card = $('card'), id = S.selected;
+    if (!id) { card.hidden = true; card.innerHTML = ''; return; }
+    var n = findNode(id), mn = S.nodeIndex[id] || {};
+    var name = (n && n.name) || mn.name || id;
+    var state = (n && n.state) || mn.state || 'nodata';
+    var h = '<div class="card-head"><span class="lab" style="flex-basis:100%">Scheda dell’incrocio</span><h3>' + esc(name) +
+      '</h3><button type="button" id="card-close">Chiudi</button></div><p class="muted mono" style="margin:4px 0 0">' + esc(id) +
+      (n && n.url ? ' · ' + esc(n.url) : '') + '</p><dl class="kv">';
+    var stateTxt = '<span class="st-' + state + '"><b>' + esc(NODE_STATE[state] || state) + '</b></span>';
+    // since_ms e' sull'orologio del nodo: lo riporto sul collettore; valori non epoch (orologio monotono) ignorati
+    var since = n && n.power && n.power.since_ms > 1e12 ? n.power.since_ms + (n.clock_offset_ms || 0) : null;
+    if (n && n.power_state) stateTxt += ' — ' + esc(POWER[n.power_state] || n.power_state) +
+      (since && since <= Date.now() + 5000 ? ' da ' + dur((Date.now() - since) / 1000) : '');
+    if (n && n.last_seen_ms) stateTxt += '<br><span class="muted">ultimo dato ' + ago(n.last_seen_ms) + ' (' + (n.source === 'radio' ? 'radio' : 'pull') + ')' +
+      (n.stale ? ': potrebbe non essere più vero' : '') + '</span>';
+    if (!n || n.source === 'none') stateTxt += '<br><span class="muted">Da questo incrocio non è arrivato niente: ' +
+      (n && n.url ? 'premi «Scarica ora» in Raccolta dati.' : 'non ha un indirizzo in collector.json e non è stato sentito via radio.') + '</span>';
+    h += kv('Stato', stateTxt);
+    var p = n && n.power;
+    if (p) {
+      var sec = p.seconds || {}, tot = (sec.sleep || 0) + (sec.active || 0) + (sec.cooldown || 0);
+      var src = Object.keys(p.by_source || {}).map(function (k) { return esc(WAKE[k] || k) + ' ' + p.by_source[k]; }).join(', ');
+      h += kv('Energia', 'a riposo il <b>' + (tot ? num(100 * (sec.sleep || 0) / tot, 0) : '–') + '%</b> del tempo · ' + num(p.wakeups || 0, 0) +
+        ' risvegli · ' + wh(p.saved_wh).join(' ') + ' risparmiati' + (src ? '<br><span class="muted">' + src + '</span>' : '') +
+        (p.fault ? '<br><b class="st-hazard">Sensore di risveglio guasto: il nodo resta sveglio.</b>' : ''));
+    } else h += kv('Energia', '<span class="muted">nessun dato di energia</span>');
+    var xs = (n && n.crosswalks) || [];
+    h += kv('Attraversamenti', xs.length ? '<ul>' + xs.map(function (c) {
+      return '<li>Strisce ' + esc(c.id) + ': <b>' + esc(XSTATE[c.state] || c.state || '–') + '</b>, luce ' + esc(LIGHT[c.light] || c.light || '–') +
+        (c.safe ? ', via libera' : '') + (c.min_eta_s != null ? ', veicolo a ' + num(c.min_eta_s, 1) + ' s' : '') + '</li>';
+    }).join('') + '</ul>' : '<span class="muted">nessun dato</span>');
+    var us = (n && n.users) || [];
+    var near = ((S.users && S.users.tags) || []).filter(function (t) { return t.node === id; });
+    var devs = {};
+    us.concat(near).forEach(function (u) { devs[u.device] = u; });
+    var dl = Object.keys(devs).map(function (d) { return devs[d]; });
+    h += kv('Tag vicini', dl.length ? '<ul>' + dl.map(function (u) {
+      return '<li>' + esc(ROLE1[u.role] || 'ruolo sconosciuto') + ' <span class="mono">' + esc(u.device) + '</span>' +
+        (u.rssi != null ? ', ' + num(u.rssi, 0) + ' dBm' : '') + (u.crosswalk != null ? ', strisce ' + esc(u.crosswalk) : '') + '</li>';
+    }).join('') + '</ul>' : '<span class="muted">nessuno</span>');
+    var pe = (n && n.peers) || [];
+    h += kv('Incroci vicini in radio', pe.length ? pe.map(function (x) { return esc(nodeName(x.id)) + (x.rssi != null ? ' (' + num(x.rssi, 0) + ' dBm)' : ''); }).join(', ')
+      : '<span class="muted">nessuno sentito</span>');
+    if (n && n.warnings && n.warnings.length) h += kv('Avvisi del nodo', '<ul>' + n.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>');
+    if (n && n.pull) {
+      var pl = n.pull;
+      h += kv('Raccolta dati', (pl.last_ms ? 'ultimo pull ' + clock(pl.last_ms) + (pl.ok ? ', riuscito' : ', non riuscito: ' + esc(pl.last_error || '')) : 'mai scaricato') +
+        ' · ' + num(pl.items_total || 0, 0) + ' elementi in archivio' + (n.clock_offset_ms ? ' · orologio sfasato di ' + num(n.clock_offset_ms / 1000, 1) + ' s' : ''));
+    }
+    h += '</dl><h4 class="sub lab">Ultimi eventi</h4>';
+    var evs = S.cardEvents.slice().reverse();
+    h += evs.length ? '<ol class="log">' + evs.map(logRow).join('') + '</ol>' : empty('Nessun evento registrato per questo incrocio.');
+    card.innerHTML = h;
+    card.hidden = false;
+    $('card-close').addEventListener('click', function () { select(null); });
+  }
+  function kv(label, value) { return '<div><dt class="lab">' + esc(label) + '</dt><dd>' + value + '</dd></div>'; }
+
+  // ------------------------------------------------------------------ pericoli
+  function renderHazards() {
+    var box = $('haz'), list = S.hazards;
+    if (!list.length) { box.innerHTML = empty('Nessun pericolo in corso. Quando un incrocio vede qualcosa compare qui, con la strada fatta dall’avviso.'); return; }
+    box.innerHTML = table(['Pericolo', 'Dove', 'Da', 'Scade', 'Avvisati', 'Fonte'], list.map(function (h) {
+      var left = h.expires_ms ? (h.expires_ms - Date.now()) / 1000 : null;
+      var dest = [];   // incroci avvisati: destinatari "to" e chi l'ha ricevuto (il percorso serve solo al disegno)
+      (h.to || []).concat(h.receivers || []).forEach(function (x) { if (x && x !== h.node && dest.indexOf(x) < 0) dest.push(x); });
+      return { id: h.node, cls: 'clickable' + (h.danger ? '' : ' is-stale'), numeric: [2, 3], cells: [
+        '<span class="' + sevClass(h) + '"></span><b>' + esc(kindName(h.kind)) + '</b> <span class="muted">' + esc(CATEGORY[h.category] || '') + '</span>',
+        esc(h.name),
+        clock(h.since_ms),
+        left != null ? 'tra ' + dur(left) : '–',
+        dest.length ? '<span title="' + esc(dest.map(nodeName).join(', ')) + '">' + plur(dest.length, 'incrocio', 'incroci') + '</span>'
+          : 'i vicini',
+        esc(h.src === 'radio' ? 'radio' : 'pull')
+      ] };
+    }));
+    bindRows(box);
+  }
+  function bindRows(box) {
+    Array.prototype.forEach.call(box.querySelectorAll('tr[data-node]'), function (tr) {
+      tr.addEventListener('click', function (e) {
+        if (e.target.closest('button')) return;
+        select(tr.getAttribute('data-node'), false);
+        $('mappa').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------ attraversamenti
+  function renderCross() {
+    var c = S.cross;
+    if (!c) return;
+    var k = c.counts;
+    $('cross-figs').innerHTML = figs([[num(k.lit_now, 0), 'strisce illuminate ora'], [num(k.unsafe_now, 0), 'con un veicolo vicino'],
+      [num(k.crossings_24h, 0), 'attraversamenti in 24 h'], [num(k.assisted_24h, 0), 'assistiti in 24 h'], [num(k.conflicts_24h, 0), 'conflitti in 24 h']]);
+    var box = $('cross');
+    if (!c.items.length) {
+      box.innerHTML = empty('Nessun dato sulle strisce: arriva con il pull dei nodi (pulsante «Scarica ora» in Raccolta dati).');
+      return;
+    }
+    box.innerHTML = table(['Incrocio', 'Strisce', 'Stato', 'Luce', 'Via libera', 'Veicolo più vicino', 'Dato'], c.items.map(function (x) {
+      var cls = x.state === 'conflict' || x.state === 'emergency' ? 'st-hazard' : (x.state === 'attention' || x.state === 'unknown' ? 'st-emergency' : '');
+      return { id: x.node, cls: 'clickable' + (x.stale ? ' is-stale' : ''), numeric: [1, 5], cells: [
+        esc(x.name), esc(x.id), '<b class="' + cls + '">' + esc(XSTATE[x.state] || x.state || '–') + '</b>',
+        esc(LIGHT[x.light] || x.light || '–'), x.safe ? 'sì' : 'no',
+        x.min_eta_s != null ? num(x.min_eta_s, 1) + ' s' : '–', x.stale ? 'vecchio, ' + agoS(x.age_s) : agoS(x.age_s)
+      ] };
+    }));
+    bindRows(box);
+  }
+
+  // ------------------------------------------------------------------ utenti della strada
+  function renderUsers() {
+    var u = S.users;
+    if (!u) return;
+    var br = u.by_role || {};
+    $('user-figs').innerHTML = figs(Object.keys(ROLES).map(function (r) { return [num(br[r] || 0, 0), ROLES[r]]; }));
+    var tl = $('tags-list');
+    tl.innerHTML = u.tags.length ? table(['Tag', 'Ruolo', 'Vicino a', 'Segnale', 'Batteria', 'Ultimo avviso', 'Sentito'], u.tags.map(function (t) {
+      return { id: t.node || null, cls: t.node ? 'clickable' : '', numeric: [3, 4], cells: [
+        '<span class="mono">' + esc(t.device) + '</span>', esc(ROLE1[t.role] || 'sconosciuto'),
+        t.node ? esc(nodeName(t.node)) : '<span class="muted">nessun incrocio</span>',
+        t.rssi != null ? num(t.rssi, 0) + ' dBm' : '–', t.battery != null ? num(t.battery, 0) + '%' : '–',
+        t.advice ? esc(ADVICE[t.advice.code] || t.advice.code) : (t.role === 'emergency' && t.next_node ? 'verso ' + esc(nodeName(t.next_node)) : '–'),
+        agoS(t.age_s) + (t.src === 'pull' ? ' (pull)' : '')
+      ] };
+    })) : empty('Nessun Tag in strada in questo momento.');
+    bindRows(tl);
+    var al = $('adv-list');
+    al.innerHTML = u.advice.length ? '<ol class="log">' + u.advice.map(function (a) {
+      var who = a.to ? 'al Tag <span class="mono">' + esc(a.to) + '</span>' :
+        (a.roles && a.roles.length ? 'a ' + a.roles.map(function (r) { return esc((ROLES[r] || r).toLowerCase()); }).join(', ') : 'a tutti');
+      return '<li><span class="when">' + agoS(a.age_s) + '</span><span class="what"><span class="sev s' + Math.max(1, Math.min(3, a.s || 1)) +
+        '"></span><b>' + esc(ADVICE[a.code] || a.code) + '</b> ' + who + ' — ' + esc(nodeName(a.node)) +
+        (a.x != null ? ', strisce ' + esc(a.x) : '') + (a.k ? ' (' + esc(kindName(a.k)) + ')' : '') + '</span></li>';
+    }).join('') + '</ol>' : empty('Nessun avviso in corso: gli incroci parlano ai Tag solo quando ce n’è uno vicino.');
+    var ac = u.advice_counts || {}, keys = Object.keys(ac).sort(function (a, b) { return ac[b] - ac[a]; });
+    $('adv-counts').innerHTML = keys.length ? bars(keys.map(function (k) { return { label: esc(ADVICE[k] || k), value: ac[k], text: num(ac[k], 0) }; }))
+      : empty('Nessun avviso nell’ultima ora (l’ascolto radio deve essere attivo per vederli).');
+    var seen = u.seen_24h || {}, sk = Object.keys(seen).sort(function (a, b) { return seen[b] - seen[a]; });
+    $('seen').innerHTML = sk.length ? bars(sk.map(function (k) { return { label: esc(CLASSES[k] || k), value: seen[k], text: num(seen[k], 0) }; }), 0, 'gray')
+      : empty('Nessun passaggio scaricato nelle ultime 24 ore.');
+  }
+
+  // ------------------------------------------------------------------ energia
+  function renderEnergy() {
+    var e = S.energy;
+    if (!e) return;
+    var t = e.total;
+    var w = wh(t.saved_wh);
+    $('energy-figs').innerHTML = figs([[t.rest_pct != null ? num(t.rest_pct, 0) : '–', 'del tempo a riposo', t.rest_pct != null ? '%' : ''],
+      [num(t.wakeups, 0), 'risvegli'], [w[0], 'risparmiati', w[1]], [t.saved_pct != null ? num(t.saved_pct, 0) : '–', 'di energia in meno', t.saved_pct != null ? '%' : '']]);
+    var bs = t.by_source || {}, keys = Object.keys(bs).filter(function (k) { return bs[k] > 0; }).sort(function (a, b) { return bs[b] - bs[a]; });
+    $('wake').innerHTML = keys.length ? bars(keys.map(function (k) { return { label: esc(WAKE[k] || k), value: bs[k], text: num(bs[k], 0), color: k === 'sensor_fault' ? 'red' : '' }; }))
+      : empty(t.nodes ? 'Nessun risveglio registrato.' : 'Nessun dato di energia: arriva con il pull dei nodi.');
+    $('energy-nodes').innerHTML = e.nodes.length ? bars(e.nodes.map(function (n) {
+      return { label: '<b>' + esc(n.name) + '</b> <span class="muted">' + esc(POWER[n.state] || '') + '</span>', value: n.rest_pct || 0,
+        text: (n.rest_pct != null ? num(n.rest_pct, 0) + '% a riposo' : '–') + ' · ' + wh(n.saved_wh).join(' ') };
+    }), 100) : empty('Nessun incrocio ha ancora mandato i dati di energia.');
+  }
+
+  // ------------------------------------------------------------------ raccolta dati
+  function renderPull() {
+    var o = S.overview, pl = S.pull;
+    if (!o || !pl) return;
+    $('pull-mode').innerHTML = pl.mode === 'interval' ? 'Pull automatico ogni <b>' + dur(pl.interval_s) + '</b>' +
+      (pl.next_ms ? ', il prossimo alle ' + clock(pl.next_ms) : '') + '. Si può anche scaricare subito.' :
+      'Pull <b>a richiesta</b>: i dati restano sui nodi finché non premi «Scarica ora».';
+    var running = pl.running || [];
+    var btn = $('pull-all'), configured = S.nodes.filter(function (n) { return n.configured; });
+    btn.disabled = !configured.length || running.length >= configured.length;
+    btn.textContent = running.length ? 'Pull in corso (' + running.length + ')…' : 'Scarica ora da tutti';
+    var box = $('pull-table');
+    // prima i nodi configurati (si possono scaricare), poi quelli sentiti solo via radio
+    var rows = configured.concat(S.nodes.filter(function (n) { return !n.configured && n.source !== 'none'; }));
+    if (!rows.length) {
+      box.innerHTML = empty('Nessun nodo configurato: aggiungi gli indirizzi dei nodi in "nodes" di collector.json e riavvia il collettore.');
+    } else {
+      box.innerHTML = (configured.length ? '' : empty('Nessun nodo configurato in collector.json: qui sotto solo gli incroci sentiti via radio, che non si possono scaricare.')) +
+        table(['Incrocio', 'Indirizzo', 'Ultimo pull', 'Esito', 'Elementi', 'Errori', ''], rows.map(function (n) {
+        var p = n.pull || {}, run = running.indexOf(n.id) >= 0 || !!S.pulling[n.id];
+        var esito = !n.configured ? '<span class="muted">non in collector.json</span>' :
+          run ? '<span class="pill run">in corso</span>' : (!p.last_ms ? '<span class="pill dim">mai</span>' :
+          (p.ok ? '<span class="pill ok">riuscito</span>' + (p.more ? ' <span class="muted">ne restano altri</span>' : '') :
+            '<span class="pill ko">non riuscito</span><br><span class="muted">' + esc(p.last_error || '') + '</span>'));
+        return { id: n.id, numeric: [4, 5], cells: [
+          '<b>' + esc(n.name) + '</b>' + (n.name !== n.id ? ' <span class="muted mono">' + esc(n.id) + '</span>' : ''),
+          n.url ? '<span class="mono">' + esc(n.url) + '</span>' : '<span class="muted">solo radio</span>',
+          p.last_ms ? clock(p.last_ms) + ' <span class="muted">(' + ago(p.last_ms) + ')</span>' : '–',
+          esito,
+          p.last_ms != null ? plur(p.items_last, 'nuovo', 'nuovi') + ' / ' + num(p.items_total || 0, 0) : '–',
+          n.configured ? (p.errors ? num(p.errors, 0) : '0') : '–',
+          n.configured ? '<button type="button" data-pull="' + esc(n.id) + '"' + (run ? ' disabled' : '') + '>' + (run ? 'In corso…' : 'Scarica ora') + '</button>' : ''
+        ] };
+      }));
+      Array.prototype.forEach.call(box.querySelectorAll('button[data-pull]'), function (b) {
+        b.addEventListener('click', function () { pullNow([b.getAttribute('data-pull')]); });
+      });
+    }
+    var L = o.listen;
+    var types = Object.keys(L.by_type || {}).map(function (k) { return k + ' ' + num(L.by_type[k], 0); }).join(', ');
+    $('radio').innerHTML = (L.udp || L.serial) ?
+      'In ascolto' + (L.udp ? ' su UDP' + (L.multicast ? ' multicast' : ' (solo unicast: multicast non disponibile)') + (L.port ? ' porta ' + L.port : '') : '') +
+      (L.serial ? (L.udp ? ' e' : '') + ' sulla radio seriale' : '') + ', senza trasmettere. ' +
+      (L.frames ? num(L.frames, 0) + ' messaggi (' + esc(types) + '), l’ultimo ' + ago(L.last_rx_ms) + '.' : 'Ancora nessun messaggio.') +
+      (L.errors ? ' <span class="st-hazard">' + num(L.errors, 0) + ' scartati.</span>' : '')
+      : 'Spento: la pagina mostra solo i dati scaricati con il pull. Si accende con "listen" in collector.json.';
+    var hist = pl.history || [];
+    $('pull-hist').innerHTML = hist.length ? '<ol class="log">' + hist.slice(0, 12).map(function (r) {
+      return '<li><span class="when">' + clock(r.ts) + '</span><span class="what"><b>' + esc(nodeName(r.node)) + '</b> — ' +
+        (r.ok ? plur(r.items, 'elemento nuovo', 'elementi nuovi') + ' in ' + plur(r.pages, 'pagina', 'pagine') : '<span class="st-hazard">' + esc(r.error || 'errore') + '</span>') +
+        '</span><span class="src">' + (r.duration_ms != null ? num(r.duration_ms / 1000, 1) + ' s' : '') + '</span></li>';
+    }).join('') + '</ol>' : empty('Nessun pull ancora.');
+  }
+
+  function pullNow(ids) {
+    (ids || []).forEach(function (id) { S.pulling[id] = true; });
+    if (!ids) S.nodes.forEach(function (n) { if (n.configured) S.pulling[n.id] = true; });
+    renderPull();
+    getJSON('/api/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ids ? { nodes: ids } : {}) })
+      .catch(function (e) { console.warn('pull non avviato:', e); })
+      .then(function () { setTimeout(function () { S.pulling = {}; loop(); }, 300); });
+  }
+  $('pull-all').addEventListener('click', function () { pullNow(null); });
+
+  // ------------------------------------------------------------------ registro
+  function logRow(e) {
+    var what = '<span class="' + sevClass(e) + '"></span><b>' + esc(kindName(e.kind)) + '</b>';
+    if (e.type === 'remote_hazard') what += ' ricevuto da <b>' + esc(nodeName(e.node)) + '</b>' + (e.from ? ' (avviso di ' + esc(nodeName(e.from)) + ')' : '');
+    else if (e.type === 'movement') what = '<span class="sev"></span><b>Passaggio tra camere</b> a ' + esc(nodeName(e.node));
+    else what += ' a <b>' + esc(nodeName(e.node)) + '</b>';
+    what += ' <span class="muted">' + esc(ACTION[e.action] || e.action || '') + (e.severity ? ', gravità ' + e.severity : '') + '</span>';
+    if (e.to && e.to.length && e.type === 'hazard') what += '<br><span class="muted">avvisati: ' + e.to.map(function (x) { return esc(nodeName(x)); }).join(', ') + '</span>';
+    var d = e.detail || {};
+    if (d.reason) what += '<br><span class="muted">' + esc(d.reason) + '</span>';
+    return '<li><span class="when">' + clock(e.ts) + '</span><span class="what">' + what + '</span><span class="src">' + esc(e.src || '') + '</span></li>';
+  }
+  function renderLog() {
+    var box = $('log');
+    if (!S.events.length) { box.innerHTML = '<li class="empty" style="display:block">Il registro è vuoto: gli eventi arrivano con il pull dei nodi o dalla radio.</li>'; return; }
+    var sig = S.events.length + ':' + S.events[S.events.length - 1].seq;
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    var list = S.events.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0) || b.seq - a.seq; }).slice(0, 200);
+    box.innerHTML = list.map(logRow).join('');
+  }
+
+  loop();
+})();
+</script>
+</body>
+</html>

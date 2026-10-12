@@ -1,18 +1,28 @@
 """API HTTP locale del nodo (solo se config api.enabled).
 
-Serve a guardare il nodo dalla rete locale anche senza il server: stato, scena attuale,
-eventi e tracce salvati nell'archivio SQLite, statistiche e heatmap. Solo lettura (GET),
-risposte JSON con CORS aperto, cosi' una pagina web qualsiasi puo' interrogarla.
+Serve a guardare il nodo dalla rete locale senza nessun server e, soprattutto, al collettore
+(server secondario, ARCHITETTURA.md §5) che quando serve viene a prendere i dati (pull): il nodo
+non manda niente in automatico. Solo lettura (GET), risposte JSON con CORS aperto.
 
   GET /api/health                              il nodo e' vivo?
-  GET /api/status                              stato, statistiche, scena, LED, config
+  GET /api/status                              stato di energia, attraversamenti, Tag vicini, peer,
+                                               ultimo status/stats, scena, segnali, config
+  GET /api/export?cursor=<c>&limit=<n>         pull del collettore: elementi salvati dopo il cursore
+                                               (limit default 500, max 2000) ->
+                                               {"node", "cursor", "more", "items": [{"table", "rid",
+                                               "ts", "msg"}], "count", "reset"}
   GET /api/scene                               oggetti visti adesso
   GET /api/events?since=<ms>&kind=&limit=      pericoli (locali e remoti) e movimenti
   GET /api/tracks?since=<ms>&limit=            riepiloghi delle tracce chiuse
   GET /api/stats?since=<ms>&limit=             statistiche periodiche
   GET /api/heatmap?camera=&class=              conteggi per cella
   GET /api/config                              configurazione senza segreti
-  GET /app                                     pagina per il telefono: avvisi + vibrazione
+  GET /                                        elenco delle risorse
+
+/api/status contiene sempre le chiavi "ts" (ora del nodo in ms: il collettore ne ricava lo
+sfasamento dell'orologio), "power", "crosswalks", "users", "peers": se il nodo non le espone
+ancora in status_snapshot() si leggono dai suoi componenti (power, crosswalk, users, peer) e,
+se mancano anche quelli, valgono None / [] / [] / {}.
 
 Su App Lab la porta va dichiarata in app.yaml (ports: [8100]).
 """
@@ -21,15 +31,22 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from config import public_config
 
-ENDPOINTS = ["/api/health", "/api/status", "/api/scene", "/api/events", "/api/tracks",
-             "/api/stats", "/api/heatmap", "/api/config", "/app"]
-APP_PAGE = Path(__file__).resolve().parent / "web" / "app.html"
+ENDPOINTS = ["/api/health", "/api/status", "/api/export", "/api/scene", "/api/events", "/api/tracks",
+             "/api/stats", "/api/heatmap", "/api/config"]
 LIMIT_DEFAULT, LIMIT_MAX = 100, 1000
+EXPORT_DEFAULT, EXPORT_MAX = 500, 2000
+# chiave di /api/status -> (attributi del nodo da provare, metodo, usa il tempo, valore se manca)
+STATUS_PARTS = {
+    "power": (("power",), "stats", True, None),
+    "crosswalks": (("crosswalk", "crosswalks"), "states", False, []),
+    "users": (("users", "user_link"), "near", True, []),
+    "peers": (("peer",), "peers", False, {}),
+    "signals": (("signals", "leds"), "state", False, None),
+}
 
 
 class _Server(ThreadingHTTPServer):
@@ -55,6 +72,7 @@ class LocalAPI:
         self._server = None
         self._thread = None
         self._errori = 0
+        self._logged = set()
 
     # ------------------------------------------------------------------ ciclo di vita
 
@@ -109,6 +127,10 @@ class LocalAPI:
                              "storage": getattr(node, "storage", None) is not None}
             if path == "/api/status":
                 return 200, self._status()
+            if path == "/api/export":
+                return 200, self._export(q)
+            if path == "/":
+                return 200, {"node": getattr(node, "node_id", None), "endpoints": ENDPOINTS}
             if path == "/api/scene":
                 return 200, {"node": getattr(node, "node_id", None), "ts": int(time.time() * 1000),
                              "objects": list(getattr(node, "latest_scene", None) or [])}
@@ -131,8 +153,29 @@ class LocalAPI:
         return 404, {"error": "risorsa non trovata", "path": path, "endpoints": ENDPOINTS}
 
     def _status(self):
-        snap = dict(self.node.status_snapshot() or {})
-        st = getattr(self.node, "storage", None)
+        node = self.node
+        snap = {}
+        try:
+            snap = dict(node.status_snapshot() or {})
+        except Exception as e:  # snapshot in errore: rispondo lo stesso con quello che riesco a leggere
+            self._log_once("snapshot", f"status_snapshot non riuscito: {e!r}")
+        now = time.time()
+        snap.setdefault("node", getattr(node, "node_id", None))
+        snap["ts"] = int(now * 1000)
+        for key, (attrs, method, with_t, default) in STATUS_PARTS.items():
+            if snap.get(key) is not None:
+                continue
+            value = default
+            for attr in attrs:
+                fn = getattr(getattr(node, attr, None), method, None)
+                if callable(fn):
+                    try:
+                        value = fn(now) if with_t else fn()
+                    except Exception as e:  # componente non ancora pronto: valore vuoto
+                        self._log_once(f"{attr}.{method}", f"{attr}.{method}() non riuscito: {e!r}")
+                    break
+            snap[key] = value
+        st = getattr(node, "storage", None)
         if st is not None:  # appena riavviato: uso l'ultimo stato salvato nell'archivio
             for key, table in (("status", "status"), ("stats", "stats")):
                 if snap.get(key) is None:
@@ -141,6 +184,22 @@ class LocalAPI:
                     except Exception as e:
                         print(f"[api] latest({table}) non riuscito: {e!r}")
         return snap
+
+    def _export(self, q):
+        """Pagina di export per il collettore. Cursore malformato = dall'inizio (lo decide l'archivio)."""
+        limit = min(max(_int_param(q, "limit", EXPORT_DEFAULT), 1), EXPORT_MAX)
+        cursor = q.get("cursor", "")
+        node_id = getattr(self.node, "node_id", None)
+        st = getattr(self.node, "storage", None)
+        if st is None:  # nodo senza archivio: niente da esportare
+            return {"node": node_id, "cursor": cursor, "more": False, "items": [], "count": 0,
+                    "reset": [], "storage": False}
+        return {"node": node_id, **st.export(cursor, limit)}
+
+    def _log_once(self, key, text):
+        if key not in self._logged:
+            self._logged.add(key)
+            print(f"[api] {text}")
 
     def _query(self, table, q, kind=None):
         since = _int_param(q, "since", 0)
@@ -167,27 +226,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parts = urlsplit(self.path)
-        if parts.path.rstrip("/") in ("", "/app"):  # pagina per il telefono (avvisi + vibrazione)
-            return self._send_page()
         code, obj = self.server.api.handle(parts.path, parts.query)
         self._send_json(code, obj)
-
-    def _send_page(self):
-        try:
-            body = APP_PAGE.read_bytes()
-            code, ctype = 200, "text/html; charset=utf-8"
-        except OSError:
-            body, code, ctype = b"pagina web/app.html mancante", 404, "text/plain; charset=utf-8"
-        try:
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(body)
-        except (ConnectionError, OSError):
-            pass
 
     def do_HEAD(self):
         self.do_GET()
