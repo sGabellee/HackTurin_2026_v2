@@ -193,12 +193,15 @@ class SituationEngine:
         self._congestion = {"since": None, "clear_since": None, "event": None}
         self._last_status = 0.0
         self._last_t = None
+        self._last_frame_t = None   # ultimo fotogramma VERO (non i giri a vuoto del nodo): per crossing_view
         self._max_raw = (0.0, 0.0)
 
     # ------------------------------------------------------------------ ingresso
 
-    def update(self, detections, t=None):
+    def update(self, detections, t=None, frame=True):
         """detections: dict del brick {"label": [{"confidence", "bounding_box_xyxy"}, ...]}.
+        frame=False: giro a vuoto del nodo (nessun fotogramma, fa solo scorrere il tempo delle regole):
+        non conta come fotogramma per la freschezza della vista degli attraversamenti.
 
         Ritorna la lista dei messaggi prodotti (hazard e track), gia' passati a on_event.
         """
@@ -206,7 +209,9 @@ class SituationEngine:
         if self._last_t is not None and t <= self._last_t:  # orologio che torna indietro
             t = self._last_t + 1e-3
         self._last_t = t
-        self.frames += 1
+        if frame:
+            self._last_frame_t = t
+            self.frames += 1
         tracks, closed = self.tracker.update(self._observations(detections or {}), t)
         light, light_age = self.light.state(t)
         ctx = {"light": light, "light_age": light_age, "deboli": self.tracker_recent(t, UTENTI_DEBOLI)}
@@ -933,10 +938,12 @@ class SituationEngine:
             self._view_log(zona, f"[vista {self.camera}] zona strisce '{zona}' assente: attraversamento mai sicuro")
             vista["error"] = "zona strisce assente"
             return vista
-        if self._last_t is not None:
-            age = max(0.0, t - self._last_t)
+        if self._last_frame_t is not None:  # solo fotogrammi veri: un giro a vuoto non e' "vedere"
+            age = max(0.0, t - self._last_frame_t)
             vista["age_s"] = round(age, 2)
             vista["fresh"] = age <= self.th["view_fresh_s"]
+        else:
+            vista["fresh"] = False
 
         nomi_attesa = [attesa] if isinstance(attesa, str) else list(attesa or [])
         attese = [self.zones[w] for w in nomi_attesa if isinstance(w, str) and self.zones.get(w)]

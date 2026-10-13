@@ -1,13 +1,14 @@
 """Fa girare il NODO COMPLETO su un video (o una cartella di immagini) sul PC e mostra cosa capisce.
 
 Usa YOLO pre-addestrato su COCO al posto del modello della board, ma tutto il resto e' identico
-a quello che gira sull'UNO Q: regole, tracce, archivio SQLite, statistiche, stato, LED (simulati
-nel pannello in alto a destra) e, con --server, invio al server sul PC e pericoli degli incroci
-vicini. Senza board potete quindi fare la demo completa con la dashboard del server.
+a quello che gira sull'UNO Q: regole, tracce, attraversamenti, archivio SQLite, statistiche, stato,
+LED e luce sopra le strisce (simulati nel pannello in alto a destra con un MCU finto). Con --udp il
+nodo parla anche via radio UDP: il collettore in ascolto (src/collector) vede i suoi pericoli.
+Il nodo resta sempre sveglio (power.enabled = false): il video non ha un sensore sul bordo.
 
 Uso:
     python replay.py video.mp4                          # finestra con zone, tracce, eventi, LED
-    python replay.py video.mp4 --server http://127.0.0.1:8000   # manda tutto al server (dashboard)
+    python replay.py video.mp4 --udp                    # pericoli anche via radio UDP (collettore)
     python replay.py video.mp4 --fps 3                  # velocita' della board (default 3)
     python replay.py video.mp4 --snapshot foto.png      # salva il primo frame (per zone_editor.py)
     python replay.py video.mp4 --save risultato.mp4     # salva il video annotato (per la demo)
@@ -28,6 +29,7 @@ from ultralytics import YOLO
 QUI = Path(__file__).resolve().parent
 sys.path.insert(0, str(QUI.parents[0] / "python"))
 from config import load_config  # noqa: E402
+from mcu import FakeMCU, unpack_leds, unpack_xwalk  # noqa: E402
 from node import Node  # noqa: E402
 
 COLORI = {"person": (255, 160, 0), "cyclist": (255, 0, 255), "vehicle": (0, 200, 0), "emergency": (0, 140, 255)}
@@ -35,16 +37,6 @@ COLORI = {"person": (255, 160, 0), "cyclist": (255, 0, 255), "vehicle": (0, 200,
 MODELLO = next((str(p) for p in (QUI.parents[1] / "dataset" / "yolov8s.pt",
                                  QUI.parents[3] / "dataset" / "yolov8s.pt") if p.exists()), "yolov8s.pt")
 MODI = {0: "spento", 1: "acceso", 2: "lento", 3: "veloce"}
-
-
-class BridgeFinto:
-    """Al posto del Bridge verso l'MCU: ricorda l'ultimo comando dei LED per disegnarlo."""
-
-    def __init__(self):
-        self.packed = 0
-
-    def call(self, name, packed, ttl_ms, **kw):
-        self.packed = int(packed)
 
 
 def frames(sorgente, fps_board):
@@ -87,10 +79,18 @@ def disegna_config(img, cam):
         cv2.putText(img, nome, tuple(px(poly)[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
 
-def disegna_led(img, packed, ruoli, t):
+LUCI = {0: "spenta", 1: "accesa", 2: "attenzione", 3: "pericolo", 4: "assistenza", 5: "emergenza", 6: "incerta"}
+
+
+def disegna_led(img, ultimo, ruoli, t):
     w = img.shape[1]
+    ultimo = ultimo or {"leds": 0, "xwalk": 0}
+    modi = unpack_leds(ultimo["leds"])
+    luce = unpack_xwalk(ultimo["xwalk"])[0]
+    cv2.putText(img, f"strisce: {LUCI.get(luce, luce)}", (w - 150, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (0, 255, 255) if luce else (160, 160, 160), 1)
     for i in range(4):
-        modo = (packed >> (2 * i)) & 3
+        modo = modi[i]
         acceso = modo == 1 or (modo == 2 and int(t * 2) % 2 == 0) or (modo == 3 and int(t * 8) % 2 == 0)
         c = (w - 150, 30 + 30 * i)
         cv2.circle(img, c, 10, (0, 0, 255) if acceso else (60, 60, 60), -1)
@@ -105,7 +105,7 @@ def main():
     ap.add_argument("--model", default=MODELLO)
     ap.add_argument("--fps", type=float, default=3.0)
     ap.add_argument("--conf", type=float, default=0.35)
-    ap.add_argument("--server", help="indirizzo del server sul PC, es. http://127.0.0.1:8000")
+    ap.add_argument("--udp", action="store_true", help="radio UDP multicast verso altri nodi e collettore")
     ap.add_argument("--out", default=str(QUI / "replay_out"), help="cartella per archivio e log")
     ap.add_argument("--snapshot")
     ap.add_argument("--save")
@@ -122,20 +122,21 @@ def main():
     for a in avvisi:
         print("[config]", a)
     cfg["api"]["enabled"] = False
-    if args.server:
-        cfg["server"]["url"] = args.server
+    cfg["power"]["enabled"] = False  # sempre sveglio: il video non ha il sensore sul bordo
+    cfg["p2p"]["enabled"] = bool(args.udp)
+    cfg["p2p"]["transports"] = ["udp"]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / cfg["data"]["db_file"]).unlink(missing_ok=True)  # ogni replay parte da un archivio pulito
-    bridge = BridgeFinto()
-    node = Node(cfg, base_dir=out, bridge=bridge, start_threads=False)
+    mcu = FakeMCU(cfg["mcu"])
+    node = Node(cfg, base_dir=out, mcu=mcu, start_threads=bool(args.udp))
     cam_id = next(iter(node.engines))
     engine = node.engines[cam_id]
     cam = cfg["_cameras"][cam_id]
-    ruoli = cfg["leds"]["roles"]
+    ruoli = cfg["signals"]["roles"]
     model = YOLO(args.model)
     writer, banner, ultimo_tick = None, [], None
-    t_start = time.time()  # il video viene "ambientato" adesso, cosi' scadenze e server tornano
+    t_start = time.time()  # il video viene "ambientato" adesso, cosi' le scadenze tornano
 
     try:
         for tv, frame in frames(args.sorgente, args.fps):
@@ -150,12 +151,9 @@ def main():
                 if e["type"] == "hazard":
                     stato = "TERMINATO" if e["action"] == "cancel" else f"sev={e['severity']}"
                     banner.append((tv, f"{tv:6.1f}s  {e['kind']}  {stato}  {e.get('actor', {}).get('track', '')}"))
-            if ultimo_tick is None or t - ultimo_tick >= 1.0:  # come il watchdog della board
+            if ultimo_tick is None or t - ultimo_tick >= node.tick_s:
                 ultimo_tick = t
-                node.tick(t)
-                if args.server:
-                    node.publisher.flush_once()
-                    node.remote.poll_once()
+                node.tick(t)  # sensori finti, attraversamenti, luci: come il ciclo della board
 
             disegna_config(frame, cam)
             for tr in engine.tracker.tracks.values():
@@ -177,7 +175,7 @@ def main():
             banner = [(tb, s) for tb, s in banner if tv - tb < 4]
             for i, (_, s) in enumerate(banner[-5:]):
                 cv2.putText(frame, s, (10, 30 + 28 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            disegna_led(frame, bridge.packed, ruoli, tv)
+            disegna_led(frame, mcu.last_signals, ruoli, tv)
 
             if args.save:
                 if writer is None:
@@ -194,10 +192,6 @@ def main():
             node.tick(t_start + tv + 2.5 * k)
         # chiude l'ultimo periodo di statistiche anche se il video e' piu' corto del periodo
         node.tick(t_start + tv + 8 + cfg["data"]["stats_interval_s"])
-        if args.server:
-            for _ in range(50):
-                if node.publisher.flush_once() == 0:
-                    break
     finally:
         if writer is not None:
             writer.release()

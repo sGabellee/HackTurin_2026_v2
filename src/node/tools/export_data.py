@@ -99,8 +99,10 @@ def stato(st):
             riga[f"ms_{cam}"] = c.get("proc_ms_avg")
         sistema = s.get("system") or {}
         riga.update({"temp_c": sistema.get("cpu_temp_c"), "ram_libera_mb": sistema.get("mem_available_mb"),
-                     "disco_libero_mb": sistema.get("disk_free_mb"), "server_online": s.get("server_online"),
-                     "coda_invio": s.get("outbox"), "avvisi": s.get("warnings")})
+                     "disco_libero_mb": sistema.get("disk_free_mb"),
+                     "energia": (s.get("power") or {}).get("state"),
+                     "risparmio_pct": (s.get("power") or {}).get("saved_pct"),
+                     "tag_vicini": s.get("tags_near"), "avvisi": s.get("warnings")})
         out.append(riga)
     return out
 

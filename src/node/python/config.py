@@ -5,8 +5,10 @@
   "piu' camere" ("cameras": {"cam0": {...}, "cam1": {...}}).
 - Non blocca mai l'avvio per un errore di configurazione: restituisce una lista di
   avvisi leggibili e disattiva solo la parte sbagliata.
-- I segreti possono stare nel file .env (accanto a config.json o nella radice della repo) invece
-  che in config.json: SC_TOKEN -> server.token, SC_P2P_KEY -> p2p.key (solo se in config.json sono vuoti).
+- Il segreto della radio puo' stare nel file .env (accanto a config.json o nella radice della repo)
+  invece che in config.json: SC_P2P_KEY -> p2p.key (solo se in config.json e' vuoto).
+- Le sezioni della v1 (server, publish.url/mqtt, wearable, leds) non servono piu': "leds" viene
+  convertita in "signals" se "signals" manca, le altre sono ignorate con un avviso.
 """
 import copy
 import json
@@ -18,6 +20,9 @@ CAMERA_KEYS = ("frame_size", "calibration", "zones", "lines", "lanes", "approach
 
 # Zone con un significato per le regole (tutte facoltative)
 KNOWN_ZONES = ("roadway", "bike_lane", "crosswalk", "sidewalk", "box", "waiting_area")
+# Piu' attraversamenti per camera: crosswalk_2, waiting_area_nord, bike_lane_est, ...
+ZONE_PREFIXES = ("crosswalk", "waiting_area", "bike_lane")
+V1_SECTIONS = ("server", "wearable")
 
 DEFAULTS = {
     "node_id": "incrocio-1",
@@ -30,12 +35,16 @@ DEFAULTS = {
     "rules": {},                      # {"speeding": {"enabled": false}, ...}
     "no_stop_zones": ["crosswalk", "bike_lane", "box"],
     "forbidden_movements": [],        # [["via", "incrocio"], ...] da -> a vietati
-    "neighbors": {},                  # {"via": "incrocio-2"}: dove porta ogni via
+    "neighbors": {},                  # {"via": "incrocio-2"}: dove porta ogni via (anche da topologia)
     "crosswalk_direction_names": ["A->B", "B->A"],
+    "position": None,                 # {"lat": .., "lon": ..}: se manca la prende dalla topologia
+    "topology": "topology.json",      # copia locale della topologia della citta' (route.py)
+    "crosswalks": None,               # None = un attraversamento per ogni zona crosswalk* (crosswalk.py)
+    "tick_s": 0.25,
     "data": {
         "store_db": True,
         "db_file": "smartcrossing.db",
-        "retention_days": 7,
+        "retention_days": 30,
         "stats_interval_s": 60,
         "status_interval_s": 10,
         "scene_hz": 1.0,
@@ -44,40 +53,28 @@ DEFAULTS = {
         "heatmap_cell_m": 0.5,
         "heatmap_cell_img": 0.02,
     },
-    "publish": {
-        "url": "",
-        "token": "",
-        "timeout_s": 3,
-        "batch_size": 1,
-        "log_file": "events.jsonl",
-        "send": {"hazard": True, "track": True, "stats": True, "status": True,
-                 "movement": True, "scene": False},
-        "mqtt": {"host": "", "port": 1883, "username": "", "password": "",
-                 "topic_prefix": "sc/v1", "qos": 1},
-    },
-    "api": {"enabled": False, "host": "0.0.0.0", "port": 8100},
+    "publish": {"log_file": "events.jsonl"},
+    "api": {"enabled": True, "host": "0.0.0.0", "port": 8100},
     "fusion": {"center_approach": "incrocio", "max_gap_s": 4.0},
-    # Il computer-server: riceve tutti i dati e inoltra i pericoli agli incroci vicini.
-    # Se publish.url e' vuoto, gli eventi vanno a <server.url>/api/events.
-    "server": {"url": "", "token": "", "poll_s": 1.0, "timeout_s": 3},
-    # I 4 LED collegati ai pin D2..D5 dell'MCU (vedi node/sketch/sketch.ino). Ruoli possibili:
-    # person (giallo) / cyclist (verde) / vehicle = acceso finche' la camera li vede,
-    # emergency (blu) = mezzo di emergenza visto qui o da un vicino, hazard (rosso) = pericolo
-    # (locale acceso o veloce, da un vicino lento), local / remote = solo pericoli locali / remoti,
-    # status = acceso se il server o un vicino risponde, any = qualsiasi pericolo
-    "leds": {"enabled": True, "roles": ["person", "emergency", "hazard", "cyclist"],
-             "hold_s": 10, "min_severity": 2, "refresh_s": 1.0, "ttl_ms": 3000},
-    # Peer-to-peer tra incroci e verso i wearable, SENZA server (vedi peer.py e firmware/):
-    # UDP multicast sulla rete locale (basta un hotspot, niente internet) e/o ESP-NOW via un
-    # ESP32 "radio" collegato in USB (serial.port, es. /dev/ttyACM0): funziona senza nessuna rete.
-    # Bracciale del ciclista (src/firmware/esp32_bracciale): canale DIRETTO incrocio -> dispositivo,
-    # UDP sulla porta 48100. devices = indirizzi IP dei bracciali (li stampano sul Monitor seriale);
-    # broadcast = prova anche 255.255.255.255 (funziona se il container dell'app e' sulla rete della board).
-    "wearable": {"enabled": False, "devices": [], "broadcast": True, "port": 48100, "period_s": 0.5,
-                 "ttl_ms": 2500, "max_s": 30},
-    "p2p": {"enabled": False, "group": "239.255.42.99", "port": 47999, "mcast_ttl": 1,
-            "peers": [], "key": "", "hops": 2, "heartbeat_s": 5, "bind_port": None,
-            "local_alerts": True, "serial": {"port": "", "baud": 115200}},
+    # Energia (power.py): il nodo dorme finche' il sensore sul bordo, un Tag o un vicino non lo svegliano
+    "power": {"enabled": True, "active_hold_s": 20, "cooldown_s": 5, "boot_active_s": 30,
+              "wake_on_radio": True, "wake_roles": ["pedestrian", "blind", "cyclist", "emergency"],
+              "sample_every_s": 0, "sample_s": 10, "power_w": {"sleep": 2.5, "active": 9.0, "cooldown": 9.0},
+              "sensor_missing_s": 5},
+    # Sketch dell'MCU (mcu.py): sensori sul bordo (Modulino Distance) e comando unico delle luci
+    "mcu": {"sensor_poll_s": 0.25, "curbs": 1, "distance_poll_s": 2.0},
+    # 4 LED di stato (D2..D5) e canali luce sopra le strisce (D6, D9, D10, D11) - signals.py
+    "signals": {"roles": ["hazard", "cyclist", "person", "emergency"], "channels": 1, "ttl_ms": 3000,
+                "refresh_s": 1.0, "hold_s": 10, "min_severity": 2},
+    # CROSS Tag e attraversamenti (users.py, crosswalk.py)
+    "users": {"near_rssi": -75, "user_timeout_s": 6, "adv_period_s": 1.0, "adv_ttl_ms": 3000,
+              "safe_eta_s": 8, "conflict_eta_s": 4, "min_state_s": 1.5},
+    # Radio SC-P2P v2 (peer.py): ESP32 su USB (ESP-NOW) e/o UDP multicast sulla rete locale
+    "p2p": {"enabled": True, "transports": ["serial", "udp"], "serial": {"port": "", "baud": 115200},
+            "group": "239.255.42.99", "port": 47999, "mcast_ttl": 1, "peers": [], "key": "",
+            "hb_sleep_s": 10, "hb_active_s": 5},
+    # Corridoio di emergenza: per quanto vale un mezzo di soccorso sentito via radio
+    "emergency": {"beacon_timeout_s": 8, "corridor_every_s": 10},
 }
 
 
@@ -150,7 +147,7 @@ def validate_camera(cam, cam_id):
             continue
         if _check_points(poly, 3, f"[{cam_id}] zones.{name}", w):
             zones[name] = [list(p) for p in poly]
-        if name not in KNOWN_ZONES:
+        if name not in KNOWN_ZONES and not str(name).startswith(ZONE_PREFIXES):
             w.append(f"[{cam_id}] zona '{name}' non usata da nessuna regola (nomi utili: {', '.join(KNOWN_ZONES)})")
     cam["zones"] = zones
 
@@ -210,7 +207,25 @@ def prepare(raw):
     if not isinstance(raw, dict):
         w.append("config.json non contiene un oggetto JSON -> uso solo i default")
         raw = {}
+    raw = dict(raw)
+    if isinstance(raw.get("leds"), dict) and "signals" not in raw:  # nome della v1
+        raw["signals"] = raw["leds"]
+        w.append("leds -> signals: rinomina la sezione in config.json")
+    for k in V1_SECTIONS:
+        if raw.get(k):
+            w.append(f"{k}: sezione della v1 non piu' usata (nessun server, nessun bracciale UDP) -> ignorata")
     cfg = _merge(DEFAULTS, raw)
+    cfg["p2p"].setdefault("near_rssi", cfg["users"].get("near_rssi", -75))  # vicinanza dei Tag (users)
+    pos = cfg.get("position")
+    if pos is not None and not (isinstance(pos, dict) and all(
+            isinstance(pos.get(k), (int, float)) and not isinstance(pos.get(k), bool) for k in ("lat", "lon"))):
+        w.append("position deve essere {\"lat\": .., \"lon\": ..} -> presa dalla topologia")
+        cfg["position"] = None
+    try:
+        cfg["tick_s"] = min(max(float(cfg.get("tick_s") or 0.25), 0.05), 2.0)
+    except (TypeError, ValueError):
+        w.append("tick_s non valido -> 0.25")
+        cfg["tick_s"] = 0.25
 
     from situation import RULES, SOGLIE  # import qui per evitare cicli
     for k in cfg.get("thresholds") or {}:
@@ -231,10 +246,16 @@ def prepare(raw):
         cams[cam_id], cw = validate_camera(cam, cam_id)
         w += cw
     cfg["_cameras"] = cams
+    try:
+        from crosswalk import crosswalk_configs
+        _, cw = crosswalk_configs(cfg)
+        w += cw
+    except Exception as e:
+        w.append(f"crosswalks non verificabili ({e!r})")
     return cfg, w
 
 
-ENV_SECRETS = (("SC_TOKEN", "server", "token"), ("SC_P2P_KEY", "p2p", "key"))
+ENV_SECRETS = (("SC_P2P_KEY", "p2p", "key"),)
 
 
 def load_env(start, levels=3):
@@ -301,7 +322,7 @@ def public_config(cfg):
     mq = pub.get("mqtt") or {}
     if mq.get("password"):
         mq["password"] = "***"
-    for sezione, chiave in (("server", "token"), ("p2p", "key")):
+    for sezione, chiave in (("server", "token"), ("p2p", "key")):  # server: config della v1
         if (c.get(sezione) or {}).get(chiave):
             c[sezione][chiave] = "***"
     return c

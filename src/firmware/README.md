@@ -1,205 +1,113 @@
-# Firmware ESP32: gateway P2P e braccialetto vibrante
+# Firmware ESP32 di CROSS v2
 
-Gli incroci si parlano direttamente, senza server e senza Wi-Fi, con il protocollo **SC-P2P v1**.
-Lo stesso protocollo arriva anche ai dispositivi indossabili.
+Due firmware, tutti e due senza Wi-Fi di casa e senza librerie da installare. Comunicano con ESP-NOW
+sul canale Wi-Fi fisso 1, con il protocollo SC-P2P v2 (`docs/ARCHITETTURA.md` §3).
 
 ```
- UNO Q incrocio-1                                                UNO Q incrocio-2
- (nodo Python)                                                   (nodo Python)
-      │ USB seriale 115200                                             │ USB
- ┌────┴──────────┐        ESP-NOW broadcast, canale fisso        ┌─────┴─────────┐
- │ ESP32 gateway │ ))) ─────────────────────────────────────(((  │ ESP32 gateway │
- └───────────────┘                    │                          └───────────────┘
-                                 ┌────┴──────────────┐
-                                 │ ESP32 braccialetto │  vibra + beacon "vru" ogni 2 s
-                                 └───────────────────┘
- (in alternativa, sulla stessa LAN: UDP multicast 239.255.42.99:47999, anche per i braccialetti con Wi-Fi)
+ CROSS Tag (pedone, non vedente,           radio dell'incrocio              UNO Q dell'incrocio
+ ciclista, conducente, soccorso)           (ESP32 su USB)                   (nodo Python, peer.py)
+ ┌──────────────┐  beacon vru/emv  ))) ┌──────────────┐  R-63 {...}\n  ┌──────────────┐
+ │ esp32_tag    │ ───────────────────▶ │ esp32_radio  │ ─────────────▶ │ node.py      │
+ │ vibra, LED,  │ ◀─────────────────── │ ponte        │ ◀───────────── │ users.py     │
+ │ suono        │      avvisi adv  ((( │ trasparente  │   {...}\n      │ crosswalk.py │
+ └──────────────┘                      └──────────────┘                └──────────────┘
+                                              ▲  ESP-NOW broadcast
+                                              ▼  (hz, hb, rq, rs tra incroci vicini)
+                                       radio degli altri incroci
 ```
 
 | Cartella | Cosa fa |
 |---|---|
-| `esp32_gateway/` | Ponte trasparente tra **seriale USB** e **ESP-NOW broadcast**. Ogni riga JSON che arriva dalla UNO Q viene trasmessa a tutti gli ESP32 nel raggio. Ogni frame ESP-NOW ricevuto viene stampato sulla seriale come una riga. Non interpreta il JSON: dedup, relay (`h`), firma e rilevanza li gestisce il nodo Python. |
-| `esp32_wearable/` | **Braccialetto**. Riceve i pericoli (`"t":"hz"`), decide se riguardano il profilo di chi lo indossa (ciclista, pedone o veicolo) e vibra con una sequenza diversa per gravità. Ogni 2 s trasmette un beacon di presenza `"vru"` che il nodo riceve tramite il gateway. |
+| `esp32_radio/` | Ponte trasparente tra seriale USB (115200, una riga JSON per messaggio) ed ESP-NOW broadcast. Ogni frame ricevuto viene stampato con davanti l'RSSI: `R-63 {...}`. Non interpreta il JSON: dedup, rilancio, firme e Tag vicini li gestisce `peer.py`. |
+| `esp32_tag/` | Il dispositivo personale, un solo firmware per i cinque ruoli. Manda il beacon di presenza e trasforma gli avvisi dell'incrocio in vibrazioni, LED e (per i non vedenti) suoni. |
 
-## Protocollo SC-P2P v1 in breve
+## Schede supportate
 
-Ogni messaggio è un solo oggetto JSON compatto, UTF-8, di **massimo 240 byte**, così entra in un
-frame ESP-NOW da 250 byte. I campi completi sono nella specifica del nodo; il firmware usa questi:
+| Scheda | Radio | Tag | Note |
+|---|---|---|---|
+| ESP32-C3 SuperMini | si | si (consigliata) | LED blu su GPIO 8 acceso con LOW, BOOT su GPIO 9 |
+| ESP32-S3 DevKitC | si | si | LED RGB della scheda: verde/rosso veri per il soccorso, BOOT su GPIO 0 |
+| ESP32 DevKit (classico) | si | si | LED su GPIO 2, BOOT su GPIO 0 |
 
-```json
-{"v":1,"t":"hz","id":"incrocio-1-cam0-000123","n":"incrocio-1","a":"n","k":"emergency_vehicle",
- "c":"emergency","s":3,"cc":95,"ts":1760180000000,"e":1760180060000,"tg":["person","cyclist","vehicle"],"h":2}
-{"v":1,"t":"hb","n":"incrocio-1","ts":1760180000000,"h":0}
-{"v":1,"t":"vru","d":"wb-a1b2c3","p":"cyclist","ts":123456,"h":0}
-```
+Core Arduino-ESP32 2.x e 3.x (anche ESP-IDF 5.5). Con il core 2.x la radio ricava l'RSSI in modalità
+promiscua (`RSSI_PROMISCUOUS 1`); se non ci riesce scrive `R0`, che il nodo tratta come "RSSI non disponibile".
 
-- `a`: `n` significa nuovo, `c` significa annullato. `c` (categoria) può valere `emergency`, `violation`, `risk` o `info`. `s` è la severità da 1 a 3. `e` è la scadenza in ms epoch. `tg` elenca i profili interessati.
-- Il **braccialetto vibra** solo se valgono tutte e tre le condizioni:
-  - il suo profilo è in `tg`, oppure `tg` manca;
-  - il messaggio non è scaduto;
-  - `s >= 2` oppure `c == "emergency"`.
+## Collegamenti del Tag
 
-  Un messaggio con `a:"c"` non fa vibrare. Ogni coppia `(id, a)` viene ricordata per almeno 60 s e le copie ripetute o rilanciate da altri incroci vengono ignorate.
-- **Tempo:** senza Wi-Fi il braccialetto non ha l'ora vera. Considera quindi il messaggio valido per `e - ts` ms dal momento in cui lo riceve. Con `WIFI_SSID` l'ora arriva via NTP e, quando `e` è un vero ms epoch, il braccialetto la confronta con `e`.
-- **Firma `sig`:** il braccialetto **non** la verifica e accetta tutto. Nel caso peggiore produce una vibrazione falsa. La verifica HMAC la fanno i nodi. Il gateway inoltra la firma così com'è.
-- I braccialetti **non fanno mai relay**. Il rilancio con `h-1` lo fanno solo i nodi.
-
-### Sequenze di vibrazione
-
-| Caso | Sequenza |
-|---|---|
-| `c == "emergency"` | 3 impulsi lunghi (0,7 s) |
-| severità 3 | 3 impulsi brevi e veloci, ripetuti 2 volte |
-| severità 2 | 2 impulsi brevi |
-| `a == "c"`, severità 1, scaduto, altro profilo | nessuna vibrazione |
-| conferma profilo | N impulsi brevi: 1 ciclista, 2 pedone, 3 veicolo |
-
-Il LED della scheda si accende insieme al motore. Una sequenza più grave interrompe quella in corso.
-Una meno grave aspetta che la sequenza in corso finisca.
-
-## Cosa serve
-
-- **Arduino IDE 2.x.**
-- **Pacchetto schede:** in *Strumenti → Scheda → Gestore schede* cercare **"esp32" di Espressif Systems**. È consigliata la versione 3.x; il codice compila anche con la 2.0.x. Se il pacchetto non compare, aggiungere questo URL in *File → Preferenze → URL aggiuntivi*: `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-- **Libreria**, solo per il braccialetto: **ArduinoJson di Benoit Blanchon, versione 7.x**. Si installa da *Strumenti → Gestisci librerie*.
-- **Hardware:**
-  - 2 schede ESP32 qualsiasi (DevKit ESP32, ESP32-S3 o ESP32-C3);
-  - per il braccialetto: motorino vibrante a moneta da 3 V, transistor NPN, resistenze, diodo e una batteria LiPo con caricatore, oppure un power bank.
-
-## Come si carica il firmware (Arduino IDE)
-
-1. Aprire `esp32_gateway/esp32_gateway.ino` oppure `esp32_wearable/esp32_wearable.ino`. Ogni sketch sta nella sua cartella, che ha lo stesso nome del file.
-2. In *Strumenti → Scheda* scegliere **ESP32 Dev Module**, oppure il modulo reale (es. "ESP32S3 Dev Module", "ESP32C3 Dev Module").
-3. In *Strumenti → Porta* scegliere la porta COM della scheda.
-4. Premere **Carica**. Se l'upload non parte (`Connecting....`), tenere premuto BOOT finché inizia la scrittura.
-5. Aprire il *Monitor seriale* a **115200** baud.
-
-Le impostazioni si cambiano con i `#define` in cima agli sketch:
-
-| Define | Default | Note |
+| Parte | Pin | Collegamento |
 |---|---|---|
-| `WIFI_CHANNEL` | 1 | **Deve essere uguale su tutti i gateway e su tutti i braccialetti** |
-| `VIBRO_PIN` | 4 | Pin del braccialetto collegato alla base del transistor |
-| `BUTTON_PIN` | 0 | Tasto BOOT. Su ESP32-C3 è il **GPIO 9** |
-| `LED_PIN` / `LED_ACTIVE_LOW` | `LED_BUILTIN` o 2 / 0 | Su ESP32-C3 SuperMini: `LED_ACTIVE_LOW 1` |
-| `WIFI_SSID` / `WIFI_PASS` | commentati | Solo braccialetto: abilita la ricezione UDP multicast dalla LAN e la sincronizzazione NTP |
+| Motorino vibrante | GPIO 4 (`VIBRO_PIN`) | GPIO 4 → resistenza 1 kΩ → base di un NPN (es. 2N2222 o BC337); motorino tra 3,3 V e collettore; emettitore a GND; diodo 1N4148 in parallelo al motorino (catodo verso 3,3 V) |
+| Buzzer (facoltativo, per non vedenti) | GPIO 5 (`BUZZER_PIN`) | buzzer passivo/piezo tra GPIO 5 e GND (con un buzzer attivo: `BUZZER_ACTIVE 1`) |
+| LED verde e rosso (facoltativi, soccorso) | `LED_GREEN_PIN`, `LED_RED_PIN` | LED + resistenza 330 Ω verso GND; senza questi LED si usa il LED della scheda |
+| Batteria (facoltativa) | `BATTERY_ADC_PIN` | partitore con due resistenze uguali verso un pin ADC (`BATTERY_DIVIDER_X10 20`) |
+| Pulsante ruolo | BOOT della scheda | nessun collegamento |
 
-## Regola del canale
+Per una demo veloce il motorino si può sostituire con un LED e una resistenza su GPIO 4.
+Tutti i `#define` in testa al file si cambiano lì o con i build flag.
 
-ESP-NOW funziona solo se mittente e ricevente sono sullo **stesso canale Wi-Fi**.
+## Caricare il firmware (Arduino IDE)
 
-- Senza Wi-Fi (caso normale, offline): il canale è `WIFI_CHANNEL`, per default 1. Deve essere uguale in tutti gli sketch.
-- Se sul braccialetto è definito `WIFI_SSID`, la radio segue il canale dell'access point e `WIFI_CHANNEL` viene ignorato.
-  - Il canale scelto viene stampato all'avvio: `[wifi] connesso ... canale=X`.
-  - Allora **tutti i gateway** devono avere `WIFI_CHANNEL X`.
-  - L'access point deve stare su un **canale fisso**, non "auto".
-- Il Wi-Fi della UNO Q non conta: il gateway ha una radio sua.
+1. Arduino IDE 2: in Gestore schede installa "esp32" di Espressif.
+2. Apri `esp32_radio/esp32_radio.ino` oppure `esp32_tag/esp32_tag.ino`.
+3. Scheda: "ESP32C3 Dev Module" per la SuperMini (con "USB CDC On Boot: Enabled"), "ESP32S3 Dev Module" o "ESP32 Dev Module".
+4. Scegli la porta e premi Carica. Monitor seriale a 115200 baud.
 
-## Collegamento del motorino (braccialetto)
+Da riga di comando (arduino-cli incluso in Arduino IDE):
 
-Un GPIO non regge la corrente del motorino (60-100 mA). Serve un transistor:
-
-```
- 3V3 (o VBAT della LiPo) ──┬─────────────┬──────────┐
-                           │             │          │
-                       [motorino]   diodo 1N4148  [100 nF]  (condensatore opzionale,
-                           │        (catodo, la      │        contro i disturbi)
-                           │         riga, verso +)  │
-                           ├─────────────┴──────────┘
-                           │
-                           C
- GPIO 4 ──[ 1 kΩ ]────────B    NPN: 2N2222 / BC547 / BC337
-              │            E
-           [10 kΩ]         │
-              │            │
- GND ─────────┴────────────┴──── GND ESP32
+```bash
+arduino-cli compile --fqbn esp32:esp32:esp32c3 src/firmware/esp32_tag
 ```
 
-- **Resistenza di base da circa 1 kΩ:** circa 2,6 mA di base, sufficienti per circa 100 mA sul collettore.
-- **Diodo di ricircolo** (1N4148 o 1N4007) **in parallelo al motorino**, con il catodo verso il +. Protegge il transistor dai picchi di tensione quando il motore si spegne.
-- **Condensatore da 100 nF** in parallelo al motorino: facoltativo, riduce i disturbi delle spazzole.
-- **Resistenza da 10 kΩ tra base e GND:** facoltativa. Tiene il motore spento durante il boot, quando il pin è ancora flottante.
-- Il BC547 regge al massimo 100 mA. Per motori più grossi usare 2N2222 o BC337.
-- Va bene anche un **modulo vibrazione già pronto**, con transistor e diodo a bordo: IN → GPIO 4, VCC → 3V3, GND → GND.
+## Il Tag
 
-## Cambio profilo (tasto BOOT)
+- **Beacon**: `{"v":2,"t":"vru","d":"tag-a1b2c3","p":"blind","q":12}` ogni 1 s;
+  per il soccorso `{"v":2,"t":"emv","d":"tag-a1b2c3","q":40,"st":"run"}` ogni 0,5 s. L'id viene dal MAC.
+- **Avvisi**: tiene solo gli `adv` con il proprio ruolo in `r` o il proprio id in `to`. Ogni avviso vale
+  `ttl` ms dall'arrivo (l'incrocio lo ripete ogni secondo): se l'incrocio tace, l'avviso si spegne da solo.
+  Tra più incroci vince il più grave; un "via libera" non copre mai un pericolo ancora valido.
+  Il campo `sig` (firma degli incroci) viene ignorato.
+- **Ruolo**: pressione lunga (1,5 s) di BOOT = ruolo successivo, salvato in memoria. Conferma con N
+  vibrazioni: 1 pedone, 2 non vedente, 3 ciclista, 4 conducente, 5 soccorso. Pressione breve = ripete.
+- **Energia**: CPU a 80 MHz e LED quasi sempre spento. `TAG_RADIO_SAVE 1` (solo core 3.x) fa dormire la
+  radio tra le finestre di ascolto, mai per i ruoli non vedente e soccorso.
 
-- **Pressione lunga (≥ 1,5 s):** passa al profilo successivo, nell'ordine ciclista → pedone → veicolo → ciclista. Il profilo viene salvato in flash (Preferences) e rimane dopo lo spegnimento.
-- **Pressione breve:** ripete le N vibrazioni del profilo attuale. All'accensione il braccialetto vibra N volte.
-- **Non tenere premuto BOOT mentre si accende o si resetta la scheda:** la scheda entrerebbe in modalità download.
+### Tabella degli avvisi (§6)
 
-## Collegamento del gateway alla UNO Q
+| Codice | Nome | Vibrazione | Suono (non vedente) |
+|---|---|---|---|
+| 1 | `WAIT` | impulso lungo ogni 2 s | tono basso lento |
+| 2 | `CROSS_OK` | due impulsi brevi ogni 1,5 s | tono alto ripetuto |
+| 3 | `KEEP_GOING` | tic leggero ogni 1 s | tic |
+| 4 / 5 | `VEHICLE_LEFT` / `VEHICLE_RIGHT` | 3 impulsi rapidi (sx) / 4 impulsi rapidi (dx) | tono che sale / scende |
+| 9 | `EMERGENCY_APPROACHING` | vibrazione continua a scatti 5 Hz | sirena a due toni |
+| 6, 7, 8, 12, 14 | `PEDESTRIAN_AHEAD`, `CYCLIST_AHEAD`, `BIKE_LANE_BLOCKED`, `HAZARD_AHEAD`, `WRONG_WAY` | 3 impulsi medi | - |
+| 13 | `ASSIST_UNAVAILABLE` | impulso lungo, pausa, impulso lungo, ogni 5 s | tono di errore |
+| 10 / 11 | `CORRIDOR_CLEAR` / `CORRIDOR_BUSY` (soccorso) | LED verde / rosso (un solo LED: lampeggio lento / veloce) | - |
+| 0 | `CLEAR` | niente | niente |
 
-- Il gateway si collega con un cavo USB alla UNO Q, che lo alimenta e ci parla in seriale.
-- **La UNO Q ha una sola porta USB-C.** Serve quindi un **hub USB-C alimentato**, con Power Delivery. L'hub alimenta la board e ci si collegano sia il gateway ESP32 sia le webcam.
-- Sulla UNO Q il gateway compare come uno di questi device:
-  - **`/dev/ttyUSB0`**, per le schede con convertitore USB-seriale CP2102/CH340 (DevKit classiche);
-  - **`/dev/ttyACM0`**, per le ESP32-S3/C3 con USB nativa.
-- Per verificarlo, dalla shell della UNO Q: `ls /dev/ttyUSB* /dev/ttyACM*` oppure `dmesg | tail`. Se non compare nulla, il kernel potrebbe non avere il driver CP210x/CH34x: in quel caso usare una ESP32-S3/C3 con USB nativa (driver `cdc_acm`).
-- Il device va indicato nella config del nodo:
+### Comandi dal monitor seriale
 
-  ```json
-  "p2p": { "serial": { "port": "/dev/ttyUSB0" } }
-  ```
+`h` aiuto, `i` stato, `1`..`5` ruolo, `t` avviso di prova, `t4` avviso di prova con codice 4, `s` sirena
+(soccorso), `d90` direzione, `v` log dettagliato, `x` autotest del lettore JSON. Una riga `{...}` viene
+trattata come un messaggio ricevuto via radio, per provare senza incrocio:
 
-- L'utente che esegue il nodo deve poter aprire la porta (gruppo `dialout`).
-- Se il nodo gira dentro App Lab, va **verificato** che il container dell'app veda il device. Se non lo vede, ci sono due alternative: avviare il nodo da shell, oppure usare solo il trasporto UDP multicast.
+```
+{"v":2,"t":"adv","n":"incrocio-124","id":"a1","r":["blind"],"c":4,"s":3,"x":0,"ttl":3000}
+```
 
-### Convenzione seriale (per chi scrive `peer.py`)
+## Prove passo passo
 
-- Formato 115200 8N1. Un oggetto JSON compatto per riga, terminato da `\n`. Il gateway tollera anche `\r\n`.
-- **Le righe che iniziano con `#` sono commenti o stato del gateway e vanno ignorate.** Il lato Python deve comunque ignorare qualunque riga che non sia JSON valido. Esempi di righe `#`:
-  - `# SC-P2P gateway pronto: mac=... canale=1 core=3.x.x ...` all'avvio;
-  - `# SC-P2P gateway stato: ...` ogni 60 s;
-  - `# errore: ...` per righe troppo lunghe (oltre 240 byte) o errori di invio.
-- Anche le righe che iniziano con `#` inviate **al** gateway vengono ignorate. Le righe che non iniziano con `{` non vengono trasmesse.
-- All'apertura della porta, le DevKit possono resettarsi. Aspettare la riga `# SC-P2P gateway pronto` oppure circa 1-2 s prima di scrivere.
-- Il gateway stampa **tutto** ciò che riceve via ESP-NOW, quindi anche:
-  - i beacon `vru` dei braccialetti, uno ogni 2 s per ciascun braccialetto;
-  - gli `hb` degli altri incroci.
+1. **Radio da sola**: carica `esp32_radio`, apri il monitor seriale. All'avvio stampa righe `#` con
+   MAC e canale. Scrivi una riga JSON e premi invio: viene trasmessa.
+2. **Tag da solo**: carica `esp32_tag`, monitor seriale, `i` per lo stato, `t` per sentire la vibrazione
+   di prova, `2` per passare a non vedente e `t4` per il suono "veicolo da sinistra".
+3. **Tag + radio**: con il Tag acceso, il monitor della radio mostra ogni secondo
+   `R-45 {"v":2,"t":"vru",...}`. Incolla nel monitor della radio un `adv` come quello sopra con
+   `"r":["pedestrian"]`: il Tag vibra.
+4. **Con il nodo** (UNO Q, Linux): collega la radio via USB e lancia
+   `python src/node/python/peer.py listen --transports serial --serial /dev/ttyACM0` per vedere il traffico, oppure
+   `python src/node/python/peer.py tag --role blind` per un finto Tag via UDP senza hardware.
+   Su Windows la seriale della radio non è supportata da `peer.py`: usare il monitor di Arduino IDE.
 
-  Non stampa i frame che non sono testo JSON. Non riceve i propri invii.
-
-## Prove
-
-### Braccialetto da solo, senza gateway
-
-Il braccialetto accetta messaggi anche dal suo monitor seriale.
-
-1. Aprire il monitor a 115200 con fine riga **"Nuova riga"**.
-2. Incollare:
-
-   ```
-   {"v":1,"t":"hz","id":"test-1","n":"incrocio-2","a":"n","k":"emergency_vehicle","c":"emergency","s":3,"cc":95,"ts":1000,"e":61000,"tg":["person","cyclist","vehicle"],"h":0}
-   ```
-
-   Il braccialetto fa 3 vibrazioni lunghe e stampa `... -> VIBRA: emergenza`.
-3. Per ripetere la prova, **cambiare `id`** (`test-2`, `test-3`, ...): lo stesso `(id, a)` viene ignorato per 60 s.
-4. Digitare `?` per stampare lo stato.
-
-### Gateway e braccialetto
-
-1. Caricare il gateway su un ESP32 e il braccialetto su un altro, con lo stesso `WIFI_CHANNEL`.
-2. Aprire il monitor seriale **del gateway** (115200, "Nuova riga"). Ogni 2 s compaiono righe come `{"v":1,"t":"vru","d":"wb-...","p":"cyclist",...}`. Questo conferma che il braccialetto viene ricevuto.
-3. Incollare nel monitor del gateway le righe di prova qui sotto. Il gateway le trasmette e il braccialetto reagisce.
-
-| Riga | Risultato atteso (profilo ciclista) |
-|---|---|
-| `{"v":1,"t":"hz","id":"t-10","n":"incrocio-2","a":"n","k":"red_light_violation","c":"violation","s":3,"cc":98,"ts":1000,"e":31000,"tg":["person","cyclist"],"h":0}` | 3 impulsi brevi ripetuti 2 volte |
-| `{"v":1,"t":"hz","id":"t-11","n":"incrocio-2","a":"n","k":"close_pass","c":"violation","s":2,"cc":97,"ts":1000,"e":21000,"tg":["cyclist"],"h":0}` | 2 impulsi brevi |
-| `{"v":1,"t":"hz","id":"t-12","n":"incrocio-2","a":"n","k":"pedestrian_waiting","c":"info","s":2,"cc":12,"ts":1000,"e":61000,"tg":["vehicle"],"h":0}` | niente: non riguarda il profilo |
-| `{"v":1,"t":"hz","id":"t-10","n":"incrocio-2","a":"c","k":"red_light_violation","c":"violation","s":3,"cc":98,"ts":1000,"e":31000,"h":0}` | niente: annullamento |
-| `{"v":1,"t":"hz","id":"t-13","n":"incrocio-2","a":"n","k":"speeding","c":"violation","s":3,"cc":99,"ts":1000,"e":1000,"h":0}` | niente: scaduto (`e - ts = 0`) |
-
-### Due incroci
-
-Collegare un gateway a ciascuna UNO Q, oppure al PC con il nodo in simulazione. I pericoli con `nx` o `tw`
-arrivano all'altro nodo via ESP-NOW anche senza rete. Il relay con `h` lo fa il Python.
-
-## Limiti noti
-
-- **ESP-NOW broadcast non è cifrato.** L'autenticità si ottiene con la firma HMAC `sig`, verificata dai nodi ma non dal braccialetto.
-- **Portata:** con l'antenna sul PCB, circa 50-150 m in vista libera, meno tra gli edifici. Tra incroci lontani serve il relay (`h`) da parte degli incroci intermedi, oppure ESP32 con antenna esterna.
-- **Batteria:** il braccialetto tiene la radio sempre accesa (circa 100 mA) per non perdere i broadcast. Una LiPo da 500 mAh dura qualche ora: va bene per la demo, non per l'uso reale.
-- **Il gateway accetta solo payload fino a 240 byte.** I frame ESP-NOW v2, più lunghi di 250 byte, vengono ignorati.
-- Le schede ESP8266 non sono supportate: hanno un'API ESP-NOW diversa.
+Le cartelle della v1 (`esp32_gateway`, `esp32_wearable`, `esp32_bracciale`, `uno_r4_incrocio`) sono state
+sostituite da questi due firmware.

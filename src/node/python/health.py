@@ -1,7 +1,7 @@
 """Stato di salute del nodo: la camera manda frame? il modello e' lento? la board scalda?
 
-Ogni data.status_interval_s secondi produce un messaggio "status" (per il server vale anche
-come battito cardiaco). Per ogni camera: FPS, tempo di elaborazione e detection medie su una
+Ogni data.status_interval_s secondi produce un messaggio "status" (archiviato: il collettore lo
+scarica con il pull). Per ogni camera: FPS, tempo di elaborazione e detection medie su una
 finestra mobile di 30 s, eta' dell'ultimo frame. Poi errori contati per punto del codice,
 metriche di sistema lette da /sys e /proc (su Windows, o dove mancano, restano null) e una
 lista di avvisi leggibili, stampati in console quando compaiono e quando rientrano.
@@ -121,7 +121,6 @@ class Health:
             self.interval = float(data.get("status_interval_s", 10))  # <= 0: niente status
         except (TypeError, ValueError):
             self.interval = 10.0
-        self.server_url = str((cfg.get("server") or {}).get("url") or "").strip()
         self.cams = {str(c): _Cam() for c in (cfg.get("_cameras") or {})}
         self.errors = {}
         self.last_errors = {}
@@ -246,8 +245,13 @@ class Health:
     def _warnings(self, t):
         """[(chiave stabile, testo)]: la chiave serve a stampare un avviso solo quando compare."""
         out = []
+        extra = self._extra or {}
+        # a riposo le camere sono ferme apposta (risparmio energetico): niente avvisi sui frame
+        dorme = (extra.get("power") or {}).get("state") == "sleep"
         for cam_id, cam in self.cams.items():
             self._prune(cam, t)
+            if dorme:
+                continue
             if cam.last_t is None:
                 if self._t0 is not None and t - self._t0 > NO_FRAME_S:
                     out.append((f"frame:{cam_id}", f"{cam_id}: nessun frame dall'avvio ({int(t - self._t0)} s)"))
@@ -266,12 +270,9 @@ class Health:
         disco = sistema.get("disk_free_mb")
         if _num(disco) and disco < MIN_DISK_MB:
             out.append(("disk", f"disco quasi pieno ({disco:.0f} MB liberi)"))
-        extra = self._extra or {}
         coda = extra.get("outbox")
         if _num(coda) and coda > MAX_OUTBOX:
             out.append(("outbox", f"coda di invio lunga ({int(coda)} messaggi)"))
-        if self.server_url and extra.get("server_online") is False:
-            out.append(("server", "server non raggiungibile"))
         regole = extra.get("rule_errors")
         if regole:
             nomi = sorted(str(k) for k in regole)

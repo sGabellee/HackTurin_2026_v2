@@ -735,15 +735,18 @@ static void buzzWrite(uint16_t f) {
 #endif
 }
 
+// sempre definita (i prototipi generati dall'IDE la dichiarano comunque); fa qualcosa solo con LED_RGB
+static inline void rgbWrite(uint8_t r, uint8_t g, uint8_t b) {
 #if LED_RGB
-static void rgbWrite(uint8_t r, uint8_t g, uint8_t b) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   rgbLedWrite(PIN_LED, r, g, b);
 #else
   neopixelWrite(PIN_LED, r, g, b);
 #endif
-}
+#else
+  (void)r; (void)g; (void)b;
 #endif
+}
 
 // LED_OFF, LED_STATUS (blu sul LED RGB), LED_ALERT (bianco), LED_GREEN, LED_RED; scrive solo se cambia
 static void ledWrite(uint8_t st) {

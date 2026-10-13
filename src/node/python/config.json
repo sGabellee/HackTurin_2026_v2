@@ -1,44 +1,55 @@
 {
-  "node_id": "incrocio-1",
-  "camera_id": "cam0",
+  "node_id": "incrocio-124",
+  "position": {"lat": 45.065263, "lon": 7.666883},
+  "topology": "topology.json",
   "confidence": 0.45,
-  "frame_size": [640, 480],
   "debug": true,
 
-  "calibration": {
-    "image_points": null,
-    "world_points_m": null
+  "cameras": {
+    "cam0": {
+      "frame_size": [640, 480],
+      "calibration": {"image_points": null, "world_points_m": null},
+      "zones": {
+        "roadway": [[0.15, 0.30], [0.74, 0.30], [0.83, 1.00], [0.05, 1.00]],
+        "bike_lane": [[0.74, 0.30], [0.82, 0.30], [0.95, 1.00], [0.83, 1.00]],
+        "crosswalk": [[0.15, 0.55], [0.80, 0.55], [0.85, 0.68], [0.12, 0.68]],
+        "waiting_area": [[0.00, 0.50], [0.14, 0.50], [0.12, 0.74], [0.00, 0.74]],
+        "waiting_area_dx": [[0.82, 0.50], [1.00, 0.50], [1.00, 0.74], [0.86, 0.74]]
+      },
+      "lines": {
+        "linea_continua": {"type": "solid", "points": [[0.45, 0.30], [0.44, 1.00]]}
+      },
+      "lanes": {
+        "corsia_verso_incrocio": {"polygon": [[0.45, 0.30], [0.74, 0.30], [0.83, 1.00], [0.44, 1.00]],
+                                  "direction": [[0.60, 0.35], [0.63, 0.95]]},
+        "corsia_verso_via": {"polygon": [[0.15, 0.30], [0.45, 0.30], [0.44, 1.00], [0.05, 1.00]],
+                             "direction": [[0.27, 0.95], [0.30, 0.35]]}
+      },
+      "approaches": {
+        "via": [[0.10, 0.25], [0.90, 0.25], [0.90, 0.40], [0.10, 0.40]],
+        "incrocio": [[0.00, 0.85], [1.00, 0.85], [1.00, 1.00], [0.00, 1.00]]
+      },
+      "approach_bearing": {"via": 207, "incrocio": 26},
+      "crosswalk_direction_names": ["sinistra->destra", "destra->sinistra"]
+    }
   },
 
-  "zones": {
-    "roadway": [[0.15, 0.30], [0.74, 0.30], [0.83, 1.00], [0.05, 1.00]],
-    "bike_lane": [[0.74, 0.30], [0.82, 0.30], [0.95, 1.00], [0.83, 1.00]],
-    "crosswalk": [[0.15, 0.55], [0.80, 0.55], [0.85, 0.68], [0.12, 0.68]]
-  },
-  "lines": {
-    "linea_continua": {"type": "solid", "points": [[0.45, 0.30], [0.44, 1.00]]}
-  },
-  "lanes": {
-    "corsia_verso_incrocio": {"polygon": [[0.45, 0.30], [0.74, 0.30], [0.83, 1.00], [0.44, 1.00]],
-                              "direction": [[0.60, 0.35], [0.63, 0.95]]},
-    "corsia_verso_via": {"polygon": [[0.15, 0.30], [0.45, 0.30], [0.44, 1.00], [0.05, 1.00]],
-                         "direction": [[0.27, 0.95], [0.30, 0.35]]}
-  },
-  "approaches": {
-    "via": [[0.10, 0.25], [0.90, 0.25], [0.90, 0.40], [0.10, 0.40]],
-    "incrocio": [[0.00, 0.85], [1.00, 0.85], [1.00, 1.00], [0.00, 1.00]]
-  },
-  "crosswalk_direction_names": ["sinistra->destra", "destra->sinistra"],
+  "crosswalks": [
+    {"id": 0, "camera": "cam0", "zone": "crosswalk", "waiting": ["waiting_area", "waiting_area_dx"],
+     "curb": 0, "light": 0, "left": "via", "right": "incrocio", "bearing": 207}
+  ],
 
-  "neighbors": {"via": "incrocio-2", "incrocio": "incrocio-8"},
   "traffic_light": {"mode": "none"},
   "thresholds": {"speed_limit_kmh": 50},
 
-  "server": {"url": "https://michubux.pythonanywhere.com", "token": "", "poll_s": 1.0},
-  "publish": {"send": {"scene": true}},
-  "leds": {"enabled": true, "roles": ["hazard", "cyclist", "person", "emergency"]},
-  "wearable": {"enabled": true, "devices": [], "broadcast": true, "port": 48100},
-  "p2p": {"enabled": false, "peers": [], "key": "", "serial": {"port": ""}},
-  "api": {"enabled": false, "port": 8100},
-  "data": {"stats_interval_s": 60, "retention_days": 7}
+  "power": {"enabled": true, "active_hold_s": 20, "cooldown_s": 5, "boot_active_s": 30,
+            "wake_on_radio": true, "wake_roles": ["pedestrian", "blind", "cyclist", "emergency"]},
+  "mcu": {"sensor_poll_s": 0.25, "curbs": 1, "distance_poll_s": 2.0},
+  "signals": {"roles": ["hazard", "cyclist", "person", "emergency"], "channels": 1, "ttl_ms": 3000},
+  "users": {"near_rssi": -75, "user_timeout_s": 6, "adv_period_s": 1.0, "adv_ttl_ms": 3000,
+            "safe_eta_s": 8, "conflict_eta_s": 4, "min_state_s": 1.5},
+  "p2p": {"enabled": true, "transports": ["serial", "udp"], "serial": {"port": "/dev/ttyACM0", "baud": 115200},
+          "key": "", "hb_sleep_s": 10, "hb_active_s": 5},
+  "api": {"enabled": true, "port": 8100},
+  "data": {"store_db": true, "retention_days": 30, "stats_interval_s": 60}
 }

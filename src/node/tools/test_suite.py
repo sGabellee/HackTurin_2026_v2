@@ -1,9 +1,9 @@
 """Batteria di test completa del nodo Smart Crossing (sul PC, senza board e senza camera).
 
 Prova: tutte le regole (caso positivo e negativo), i riepiloghi delle tracce, la robustezza,
-la configurazione, il nodo intero (archivio, statistiche, stato, LED), il server sul PC
-(inoltro per direzione, simulazione dalla dashboard), il peer-to-peer tra due incroci senza
-server, l'API locale con la pagina per il telefono e la fusione tra due camere.
+la configurazione, il segreto della radio dal .env, il peer-to-peer tra due incroci in UDP,
+l'API locale e la fusione tra due camere. I moduli nuovi della v2 hanno i loro test in tests/
+(test_node.py prova il nodo intero: energia, attraversamenti, Tag, corridoio di emergenza).
 
 Uso:  python test_suite.py          (dalla cartella node/tools; esce con codice 1 se qualcosa fallisce)
 """
@@ -23,7 +23,6 @@ from pathlib import Path
 
 QUI = Path(__file__).resolve().parent
 sys.path.insert(0, str(QUI.parents[0] / "python"))
-sys.path.insert(0, str(QUI.parents[1] / "server"))
 sys.path.insert(0, str(QUI))
 
 import simulate as sim  # noqa: E402  (generatori di detection finte)
@@ -334,12 +333,14 @@ def test_configurazione():
         bom.write_text(json.dumps({"node_id": "con-bom"}), encoding="utf-8-sig")
         cfg, w = load_config(bom)
         check("config: file con BOM (Notepad)", cfg["node_id"] == "con-bom")
-    pub = public_config(prepare({"server": {"token": "segreto"}, "p2p": {"key": "k"},
-                                 "publish": {"token": "t"}})[0])
+    pub = public_config(prepare({"p2p": {"key": "segreto"}})[0])
     check("config pubblica senza segreti", "segreto" not in json.dumps(pub) and pub["p2p"]["key"] == "***")
+    w = avvisi({"server": {"url": "http://x"}, "leds": {"roles": ["hazard"]}})
+    check("config: sezioni della v1 segnalate", "server" in w and "leds -> signals" in w, w)
+    check("config: leds della v1 diventa signals", prepare({"leds": {"roles": ["hazard"]}})[0]["signals"]["roles"] == ["hazard"])
 
 
-# ---------------------------------------------------------------------- 4-7. nodo, server, p2p, api
+# ---------------------------------------------------------------------- 4-7. nodo, p2p, api
 
 class FakeBridge:
     def __init__(self):
@@ -366,21 +367,10 @@ def http_json(url, data=None):
         return json.loads(r.read().decode())
 
 
-def avvia_server(tmp):
-    import server as srv
-    hub = srv.Hub(Path(tmp) / "server.db", srv.Topology(QUI.parents[1] / "server" / "topology.json"))
-    httpd = srv.make_server(hub, "127.0.0.1", 0)
-    httpd.hub = hub
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
-
-
-def node_cfg(node_id, tmp_url=None, **extra):
+def node_cfg(node_id, **extra):
     raw = copy.deepcopy(CFG)
     raw["node_id"] = node_id
     raw["data"] = {"stats_interval_s": 5, "status_interval_s": 2}
-    if tmp_url:
-        raw["server"] = {"url": tmp_url, "poll_s": 0.5}
     raw.update(extra)
     cfg, _ = prepare(raw)
     return cfg
@@ -400,296 +390,25 @@ def guida(node, gen, durata, t0, cam="cam0", bridge=None, registro=None):
 
 
 @test
-def test_nodo_e_server():
-    from node import Node
+def test_env():
+    """Segreto della radio (SC_P2P_KEY) dal .env; un valore scritto in config.json vince."""
     with tempfile.TemporaryDirectory() as tmp:
-        httpd, url = avvia_server(tmp)
-        bridge = FakeBridge()
-        node = Node(node_cfg("incrocio-1", url), base_dir=tmp, bridge=bridge, start_threads=False)
-        try:
-            t0 = time.time()
-            led = []
-            guida(node, sim.auto(sim.zigzag, 7.2), 16, t0, bridge=bridge, registro=led)
-            st = node.storage
-            ev = [e for e in st.query("events", limit=None) if e.get("type") == "hazard"]
-            check("nodo: pericolo salvato nell'archivio", any(e["kind"] == "bike_lane_invasion" for e in ev),
-                  [e["kind"] for e in ev])
-            check("nodo: riepilogo traccia salvato", st.query("tracks", limit=None))
-            tutte = st.query("stats", limit=None)
-            check("nodo: statistiche periodiche", len(tutte) >= 2, len(tutte))
-            cams = [(s.get("cameras") or {}).get("cam0", {}) for s in tutte]
-            check("statistiche: conteggi, movimenti, velocita' V85, heatmap",
-                  sum(c.get("counts", {}).get("vehicle", 0) for c in cams) >= 1
-                  and any(c.get("movements") for c in cams) and any(c.get("speeds") for c in cams)
-                  and any(c.get("heatmap") for c in cams), cams)
-            check("archivio: heatmap accumulata", st.heatmap(camera="cam0"))
-            check("nodo: stato di salute", (st.latest("status") or {}).get("cameras"))
-            check("LED rosso (pericolo) acceso durante l'invasione", any(m[2] > 0 for m in led), led)
-            check("LED giallo e verde spenti: c'era solo un'auto", not any(m[0] or m[3] for m in led), led)
-            check("pericolo con incrocio successivo (next_nodes)", any(e.get("next_nodes") == ["incrocio-3"] for e in ev),
-                  [e.get("next_nodes") for e in ev])
-
-            for _ in range(20):  # svuota la coda verso il server
-                if node.publisher.flush_once() == 0 and node.publisher.backlog() == 0:
-                    break
-            check("invio: coda verso il server vuota", node.publisher.backlog() == 0, node.publisher.backlog())
-            ricevuti = http_json(f"{url}/api/events?limit=500")["messages"]
-            check("server: ha ricevuto i pericoli", any(m.get("kind") == "bike_lane_invasion" for m in ricevuti))
-            check("server: ha ricevuto tracce, statistiche e stato",
-                  {"track", "stats", "status"} <= {m.get("type") for m in ricevuti}, {m.get("type") for m in ricevuti})
-            in3 = http_json(f"{url}/api/inbox/incrocio-3?after=0")["messages"]
-            in2 = http_json(f"{url}/api/inbox/incrocio-2?after=0")["messages"]
-            check("server: inoltro SOLO verso l'incrocio dove va il veicolo (incrocio-3)",
-                  any(m.get("kind") == "bike_lane_invasion" for m in in3)
-                  and not any(m.get("kind") == "bike_lane_invasion" for m in in2),
-                  (len(in3), len(in2)))
-
-            http_json(f"{url}/api/simulate", {"from_node": "incrocio-2", "to_node": "incrocio-1",
-                                              "kind": "bike_lane_invasion", "severity": 3})
-            n = node.remote.poll_once()
-            m = modes(bridge.calls[-1][1][0])  # senza tick: il LED cambia appena arriva il pericolo
-            check("dashboard -> server -> board: LED rosso subito, senza aspettare il tick", n >= 1 and m[2] > 0, (n, m))
-            node.tick(time.time())
-            remoti = [e for e in st.query("events", limit=None) if e.get("type") == "remote_hazard"]
-            check("pericolo remoto archiviato", remoti)
-
-            doppio = dict(remoti[0])
-            check("stesso pericolo dal p2p: gestito una volta sola", node._on_remote(doppio, via="p2p") is False)
-
-            now = int(time.time() * 1000)
-            node._on_server({"type": "remote_hazard", "id": "test-emerg", "kind": "emergency_vehicle",
-                             "category": "emergency", "severity": 3, "action": "new", "from_node": "incrocio-2",
-                             "ts": now, "expires": now + 60000})
-            node.tick(time.time())
-            check("ambulanza segnalata da un vicino: LED blu lampeggio veloce", modes(bridge.calls[-1][1][0])[1] == 3)
-            node._on_server({"type": "remote_hazard", "id": "test-emerg", "kind": "emergency_vehicle",
-                             "category": "emergency", "severity": 3, "action": "cancel", "from_node": "incrocio-2",
-                             "ts": now, "expires": now})
-            node.tick(time.time())
-            check("cancel dell'ambulanza: LED blu spento", modes(bridge.calls[-1][1][0])[1] == 0)
-            nodi = http_json(f"{url}/api/nodes")
-            check("server: elenco nodi", "incrocio-1" in json.dumps(nodi))
-            with urllib.request.urlopen(url + "/", timeout=5) as r:
-                check("server: dashboard servita", b"<html" in r.read(2000).lower())
-            with urllib.request.urlopen(url + "/app?node=incrocio-1", timeout=5) as r:
-                check("server: pagina telefono su /app", b"<html" in r.read(3000).lower())
-            for pagina in ("/cyclist", "/console", "/static/style.css"):
-                with urllib.request.urlopen(url + pagina, timeout=5) as r:
-                    check(f"server: pagina {pagina}", r.status == 200 and len(r.read()) > 100)
-            traffico = http_json(f"{url}/api/traffic")
-            n1 = next((n for n in traffico if n["node_id"] == "incrocio-1"), {})
-            check("api/traffic: incrocio-1 con coordinate, conteggi e stato",
-                  n1.get("coordinates") and set(n1.get("counts", {})) >= {"pedestrians", "cyclists", "ambulances", "vehicles"}
-                  and n1.get("status") and n1.get("source") == "board", n1)
-            req = urllib.request.Request(f"{url}/api/traffic", method="POST", headers={"Content-Type": "application/json"},
-                                         data=json.dumps({"node_id": "node_07", "coordinates": {"lat": 45.06, "lon": 7.67},
-                                                          "counts": {"pedestrians": 5, "cyclists": 2, "ambulances": 0}}).encode())
-            with urllib.request.urlopen(req, timeout=5) as r:
-                check("api/traffic POST del client.py (201)", r.status == 201)
-            n7 = next((n for n in http_json(f"{url}/api/traffic") if n["node_id"] == "node_07"), {})
-            check("api/traffic: nodo del client.py sulla mappa", n7.get("source") == "client" and n7["counts"]["pedestrians"] == 5)
-            tel = http_json(f"{url}/phone/incrocio-1/api/events?since=0")
-            check("server: API telefono = pericoli del nodo + quelli dei vicini",
-                  any(m.get("type") == "hazard" and m.get("kind") == "bike_lane_invasion" for m in tel)
-                  and any(m.get("type") == "remote_hazard" for m in tel), [(m.get("type"), m.get("kind")) for m in tel])
-        finally:
-            node.close()
-            httpd.shutdown()
-            httpd.server_close()
-            httpd.hub.close()
-
-
-@test
-def test_led_tempo_reale():
-    """Giallo = persona, verde = ciclista, blu = emergenza: accesi al frame stesso, senza tick."""
-    from node import Node
-    with tempfile.TemporaryDirectory() as tmp:
-        bridge = FakeBridge()
-        node = Node(node_cfg("incrocio-1"), base_dir=tmp, bridge=bridge, start_threads=False)
-        try:
-            def frame(dets, t):
-                det = {}
-                for label, x1, y1, x2, y2 in dets:
-                    det.setdefault(label, []).append({"confidence": 0.9, "bounding_box_xyxy": (x1, y1, x2, y2)})
-                node.process(det, "cam0", t)
-                return modes(bridge.calls[-1][1][0]) if bridge.calls else None
-
-            t0 = time.time()
-            persona = [sim.box("person", 3.0, 15.0, 0.02, 0.07)]
-            m = [frame(persona, t0 + k * 0.1) for k in range(3)]
-            check("LED giallo acceso appena la camera vede una persona (2-3 frame)", m[-1] and m[-1][0] == 1, m)
-            m = frame([], t0 + 1.5)
-            check("LED giallo spento quando la persona sparisce", m and m[0] == 0, m)
-            bici = sim.ciclista(lambda tau: (8.3, 15.0), 5)
-            m = [frame(bici(0), t0 + 10 + k * 0.1) for k in range(3)]
-            check("LED verde acceso con un ciclista", m[-1] and m[-1][3] == 1, m)
-            amb = [sim.box("ambulance", 5.0, 15.0, 0.08, 0.06)]
-            m = [frame(amb, t0 + 20 + k * 0.1) for k in range(3)]
-            check("LED blu lampeggio veloce con un mezzo di emergenza", m[-1] and m[-1][1] == 3, m)
-        finally:
-            node.close()
-
-
-@test
-def test_led_pericolo_si_spegne():
-    """Pericolo visto qui: spento appena l'oggetto sparisce. Pericolo di un vicino: resta acceso."""
-    from leds import LedController
-    bridge = FakeBridge()
-    leds = LedController({"roles": ["person", "emergency", "hazard", "cyclist"]}, bridge=bridge, start_thread=False)
-    t = time.time()
-    now = int(t * 1000)
-    leds.on_hazard({"id": "h1", "kind": "bike_lane_invasion", "severity": 3, "ts": now, "expires": now + 30000,
-                    "actor": {"track": "cam0-9", "class": "vehicle"}}, True, t)
-    leds.set_presence({"vehicle"}, t, ["cam0-9"])
-    leds.push(t)
-    check("LED rosso acceso mentre l'auto e' nella ciclabile", modes(bridge.calls[-1][1][0])[2] > 0)
-    leds.set_presence({"vehicle"}, t + 0.3, ["cam0-9"])
-    leds.push(t + 0.3)
-    check("LED rosso ancora acceso finche' l'auto si vede", modes(bridge.calls[-1][1][0])[2] > 0)
-    leds.push(t + 1.2)
-    check("LED rosso spento appena l'auto sparisce (non dopo 10 s)", modes(bridge.calls[-1][1][0])[2] == 0)
-    leds.on_hazard({"id": "r1", "kind": "bike_lane_invasion", "severity": 2, "ts": now, "expires": now + 30000,
-                    "from_node": "incrocio-2"}, False, t + 1.2)
-    leds.push(t + 5)
-    check("pericolo di un vicino: LED rosso resta acceso anche senza oggetti in vista",
-          modes(bridge.calls[-1][1][0])[2] > 0)
-    leds.close()
-
-
-@test
-def test_inoltro_percorsi():
-    """Inoltro sulla topologia vera: lungo la direzione (2 o 3 incroci), ai vicini, sul percorso piu' breve."""
-    import server as srv
-    with tempfile.TemporaryDirectory() as tmp:
-        hub = srv.Hub(Path(tmp) / "server.db", srv.Topology(QUI.parents[1] / "server" / "topology.json"))
-        try:
-            def a_chi(**body):
-                return [d["node"] for d in hub.simulate(body)["delivered_to"]]
-            check("percorso piu' breve 4 -> 1: anche gli incroci in mezzo",
-                  a_chi(from_node="incrocio-4", to_node="incrocio-1") == ["incrocio-3", "incrocio-2", "incrocio-1"])
-            check("direzione nota: 2 incroci lungo la strada",
-                  a_chi(from_node="incrocio-1", towards="sud-ovest") == ["incrocio-2", "incrocio-3"])
-            check("ambulanza con direzione nota: 3 incroci lungo la strada",
-                  a_chi(from_node="incrocio-1", towards="sud-ovest", kind="emergency_vehicle")
-                  == ["incrocio-2", "incrocio-3", "incrocio-4"])
-            check("direzione come punto cardinale (nord)",
-                  a_chi(from_node="incrocio-3", towards="nord")[:1] == ["incrocio-2"])
-            vicini6 = sorted(hub._graph()[0]["incrocio-6"])  # dalla topologia, qualunque essa sia
-            check("direzione sconosciuta: solo gli incroci vicini",
-                  sorted(a_chi(from_node="incrocio-6")) == vicini6, vicini6)
-        finally:
-            hub.close()
-
-
-@test
-def test_bracciale():
-    """Canale diretto incrocio -> bracciale (UDP 48100): allarme finche' l'auto e' nella ciclabile."""
-    from wearable import WearableLink
-    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    rx.bind(("127.0.0.1", 0))
-    rx.settimeout(1.0)
-    porta = rx.getsockname()[1]
-    w = WearableLink({"enabled": True, "devices": [f"127.0.0.1:{porta}"], "broadcast": False}, "incrocio-1")
-
-    def ricevi():
-        ultimo = None
-        try:
-            while True:
-                ultimo = json.loads(rx.recv(512).decode())
-                rx.settimeout(0.05)
-        except OSError:
-            pass
-        rx.settimeout(1.0)
-        return ultimo or {}
-
-    try:
-        t = time.time()
-        now = int(t * 1000)
-        w.push(t)
-        m = ricevi()
-        check("bracciale: keep-alive 'nessun pericolo' dall'incrocio", m.get("t") == "wr" and m.get("on") == 0, m)
-        w.on_hazard({"id": "h1", "kind": "bike_lane_invasion", "severity": 2, "ts": now, "expires": now + 30000,
-                     "action": "new", "actor": {"track": "cam0-5"}}, t)
-        w.set_tracks(["cam0-5"], t)
-        w.push(t)
-        m = ricevi()
-        check("bracciale: auto nella ciclabile -> allarme subito",
-              m.get("on") == 1 and m.get("k") == "bike_lane_invasion" and m.get("n") == "incrocio-1", m)
-        w.push(t + 1.5)
-        m = ricevi()
-        check("bracciale: auto sparita -> fine allarme", m.get("on") == 0, m)
-        w.on_hazard({"id": "h2", "kind": "illegal_stop", "severity": 2, "ts": now, "expires": now + 30000,
-                     "action": "new", "where": {"zone": "crosswalk"}}, t + 2)
-        w.push(t + 2.6)
-        check("bracciale: auto ferma sulle STRISCE non interessa il ciclista", ricevi().get("on") == 0)
-        w.on_hazard({"id": "h3", "kind": "illegal_stop", "severity": 2, "ts": now, "expires": now + 60000,
-                     "action": "new", "where": {"zone": "bike_lane"}}, t + 3)
-        w.push(t + 3)
-        m = ricevi()
-        check("bracciale: auto ferma nella CICLABILE -> allarme", m.get("on") == 1 and m.get("k") == "illegal_stop", m)
-        w.on_hazard({"id": "h3", "kind": "illegal_stop", "action": "cancel", "where": {"zone": "bike_lane"}}, t + 4)
-        w.push(t + 4)
-        check("bracciale: l'auto riparte (cancel) -> fine allarme", ricevi().get("on") == 0)
-    finally:
-        w.close()
-        rx.close()
-
-
-@test
-def test_token_e_env():
-    """Token dei dispositivi (SC_TOKEN): scritture protette, letture della dashboard pubbliche; .env -> nodo."""
-    import server as srv
-    with tempfile.TemporaryDirectory() as tmp:
-        hub = srv.Hub(Path(tmp) / "server.db", srv.Topology(QUI.parents[1] / "server" / "topology.json"))
-        httpd = srv.make_server(hub, "127.0.0.1", 0, token="prova-token")
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        url = f"http://127.0.0.1:{httpd.server_address[1]}"
-
-        def stato(path, data=None, token=None):
-            h = {"Content-Type": "application/json"}
-            if token:
-                h["Authorization"] = f"Bearer {token}"
-            req = urllib.request.Request(url + path, data=json.dumps(data).encode() if data is not None else None,
-                                         headers=h)
-            try:
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    return r.status
-            except urllib.error.HTTPError as e:
-                return e.code
-
-        traffico = {"node_id": "node_01", "counts": {"pedestrians": 1, "cyclists": 0, "ambulances": 0}}
-        try:
-            check("token: POST /api/traffic senza token -> 401", stato("/api/traffic", traffico) == 401)
-            check("token: POST /api/traffic con token sbagliato -> 401", stato("/api/traffic", traffico, "no") == 401)
-            check("token: POST /api/traffic con il token giusto -> 201",
-                  stato("/api/traffic", traffico, "prova-token") == 201)
-            check("token: casella dei pericoli del nodo protetta",
-                  stato("/api/inbox/incrocio-1") == 401 and stato("/api/inbox/incrocio-1", token="prova-token") == 200)
-            check("token: Simula pericolo protetto",
-                  stato("/api/simulate", {"from_node": "incrocio-2", "to_node": "incrocio-1"}) == 401)
-            pubbliche = ("/", "/cyclist", "/api/traffic", "/api/summary", "/api/nodes", "/api/events", "/api/kinds")
-            check("token: pagine e letture della dashboard pubbliche",
-                  all(stato(p) == 200 for p in pubbliche), {p: stato(p) for p in pubbliche})
-        finally:
-            httpd.shutdown()
-            httpd.server_close()
-            hub.close()
-
         app = Path(tmp) / "app"
         app.mkdir()
-        (app / ".env").write_text('# commento\nSC_TOKEN="dal-env"\nexport SC_P2P_KEY=chiave-env\n', encoding="utf-8")
-        (app / "config.json").write_text(json.dumps({"server": {"url": "http://x"}, "p2p": {"key": "dal-config"}}),
-                                         encoding="utf-8")
-        salvate = {k: os.environ.pop(k, None) for k in ("SC_TOKEN", "SC_P2P_KEY")}
+        (app / ".env").write_text('# commento\nexport SC_P2P_KEY="chiave-env"\n', encoding="utf-8")
+        salvata = os.environ.pop("SC_P2P_KEY", None)
         try:
+            (app / "config.json").write_text(json.dumps({"p2p": {"key": ""}}), encoding="utf-8")
             cfg, _ = load_config(app / "config.json")
-            check(".env: token del server letto dal .env", cfg["server"]["token"] == "dal-env", cfg["server"])
+            check(".env: chiave della radio letta dal .env", cfg["p2p"]["key"] == "chiave-env", cfg["p2p"])
+            os.environ.pop("SC_P2P_KEY", None)
+            (app / "config.json").write_text(json.dumps({"p2p": {"key": "dal-config"}}), encoding="utf-8")
+            cfg, _ = load_config(app / "config.json")
             check(".env: un valore scritto in config.json vince sul .env", cfg["p2p"]["key"] == "dal-config")
         finally:
-            for k, v in salvate.items():
-                os.environ.pop(k, None)
-                if v is not None:
-                    os.environ[k] = v
+            os.environ.pop("SC_P2P_KEY", None)
+            if salvata is not None:
+                os.environ["SC_P2P_KEY"] = salvata
 
 
 @test
@@ -697,9 +416,9 @@ def test_peer_to_peer():
     from node import Node
     with tempfile.TemporaryDirectory() as tmp:
         pa, pb = porta_libera(), porta_libera()
-        cfg_a = node_cfg("incrocio-1", p2p={"enabled": True, "port": pa, "bind_port": pa,
+        cfg_a = node_cfg("incrocio-1", topology=None, p2p={"enabled": True, "port": pa, "bind_port": pa,
                                             "peers": [f"127.0.0.1:{pb}"], "key": "chiave"})
-        cfg_b = node_cfg("incrocio-3", p2p={"enabled": True, "port": pb, "bind_port": pb,
+        cfg_b = node_cfg("incrocio-3", topology=None, p2p={"enabled": True, "port": pb, "bind_port": pb,
                                             "peers": [f"127.0.0.1:{pa}"], "key": "chiave"})
         cfg_b["neighbors"] = {"ovest": "incrocio-1"}
         bridge_b = FakeBridge()
@@ -714,10 +433,12 @@ def test_peer_to_peer():
                 b.peer.poll_once(0.05)
             b.tick(time.time())
             remoti = [e for e in b.storage.query("events", limit=None) if e.get("type") == "remote_hazard"]
-            check("p2p senza server: incrocio-3 riceve il pericolo di incrocio-1",
+            check("p2p: incrocio-3 riceve il pericolo di incrocio-1",
                   any(e.get("kind") == "bike_lane_invasion" and e.get("via") == "p2p" for e in remoti),
                   [(e.get("kind"), e.get("via")) for e in remoti])
-            check("p2p: LED rosso acceso su incrocio-3", bridge_b.calls and modes(bridge_b.calls[-1][1][0])[2] > 0)
+            led = [c for c in bridge_b.calls if c[0] in ("set_signals", "set_leds")]
+            check("p2p: LED del pericolo acceso su incrocio-3",
+                  led and modes(led[-1][1][0])[b.signals.roles.index("hazard")] > 0, led[-1:])
             a.peer.send_heartbeat()
             b.peer.poll_once(0.3)
             check("p2p: heartbeat -> vicino online", b.peer.online and "incrocio-1" in b.peer.peers())
@@ -736,7 +457,7 @@ def test_api_locale():
     from node import Node
     with tempfile.TemporaryDirectory() as tmp:
         cfg = node_cfg("incrocio-1", api={"enabled": True, "host": "127.0.0.1", "port": 0},
-                       server={"url": "", "token": "segreto"})
+                       p2p={"enabled": False, "key": "segreto"})
         node = Node(cfg, base_dir=tmp, bridge=FakeBridge(), start_threads=False)
         try:
             node.api.start()
@@ -777,8 +498,7 @@ def main():
     for fn in (test_scenari_base, test_u_turn, test_collisione_e_mancato_investimento, test_sorpasso_ciclista,
                test_coda, test_pedoni, test_movimento_vietato, test_semaforo, test_cicli_di_vita,
                test_regole_senza_calibrazione, test_riepiloghi, test_robustezza, test_configurazione,
-               test_nodo_e_server, test_led_tempo_reale, test_led_pericolo_si_spegne,
-               test_inoltro_percorsi, test_bracciale, test_token_e_env, test_peer_to_peer, test_api_locale,
+               test_env, test_peer_to_peer, test_api_locale,
                test_fusione_due_camere):
         print(f"\n== {fn.__name__}")
         fn()

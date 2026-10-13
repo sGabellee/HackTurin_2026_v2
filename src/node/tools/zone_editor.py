@@ -1,9 +1,12 @@
 """Disegna ciclabile, strisce, linee e vie su una foto della camera e salva tutto in config.json.
 
-Uso:  python zone_editor.py foto.png  [..\\python\\config.json]
+Uso:  python zone_editor.py foto.png  [..\\python\\config.json]  [--camera cam0]
 
 La foto deve essere ESATTAMENTE l'inquadratura della camera (es. screenshot del solo video
-della pagina web dell'app, ritagliato sui bordi). Le coordinate salvate sono 0..1.
+della pagina web dell'app, ritagliato sui bordi). Le coordinate salvate sono 0..1, dentro
+config["cameras"][camera] (formato v2) o al primo livello per i config a una camera.
+Gli attraversamenti (config["crosswalks"]) vengono creati per ogni zona crosswalk* disegnata, con la
+sua area d'attesa, il sensore sul bordo e il canale luce in ordine: ritoccateli poi a mano.
 
 Comandi nella finestra:
     click sinistro = aggiungi punto     u = annulla ultimo punto
@@ -24,7 +27,10 @@ ELEMENTI = [
     ("zones.bike_lane", "contorno della PISTA CICLABILE"),
     ("zones.crosswalk", "contorno delle STRISCE PEDONALI (cliccate prima il lato lungo: definisce la direzione A->B)"),
     ("zones.sidewalk", "MARCIAPIEDE (facoltativo: serve per i ciclisti sul marciapiede, s per saltare)"),
-    ("zones.waiting_area", "AREA D'ATTESA dei pedoni accanto alle strisce (facoltativo)"),
+    ("zones.waiting_area", "AREA D'ATTESA dei pedoni su un lato delle strisce (serve per avvisare i Tag)"),
+    ("zones.waiting_area_dx", "AREA D'ATTESA sull'altro lato delle strisce (facoltativo)"),
+    ("zones.crosswalk_2", "SECONDE STRISCE viste da questa camera (facoltativo)"),
+    ("zones.waiting_area_2", "AREA D'ATTESA delle seconde strisce (facoltativo)"),
     ("zones.box", "CENTRO DELL'INCROCIO dove e' vietato fermarsi (facoltativo)"),
     ("lines.linea_continua", "LINEA CONTINUA (2 o piu' punti lungo la linea)"),
     ("lanes.corsia_verso_incrocio", "contorno della CORSIA che va VERSO l'incrocio (verso la camera)"),
@@ -38,9 +44,19 @@ COLORI = {"calibration": (0, 255, 255), "zones": (255, 0, 255), "lines": (0, 0, 
 
 
 def main():
-    foto = Path(sys.argv[1])
-    cfg_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(__file__).resolve().parents[1] / "python" / "config.json"
-    cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+    args = list(sys.argv[1:])
+    cam_id = "cam0"
+    if "--camera" in args:
+        i = args.index("--camera")
+        cam_id = args[i + 1] if i + 1 < len(args) else cam_id
+        del args[i:i + 2]
+    foto = Path(args[0])
+    cfg_path = Path(args[1]) if len(args) > 1 else Path(__file__).resolve().parents[1] / "python" / "config.json"
+    radice = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+    if "cameras" in radice or "zones" not in radice:  # formato v2: una sezione per camera
+        cfg = radice.setdefault("cameras", {}).setdefault(cam_id, {})
+    else:
+        cfg = radice
     immagine = cv2.imread(str(foto))
     if immagine is None:
         sys.exit(f"non riesco ad aprire {foto}")
@@ -87,11 +103,11 @@ def main():
             elif tasto == ord("s"):
                 break
             elif tasto == 27:
-                return salva(cfg, cfg_path)
+                return salva(radice, cfg, cam_id, cfg_path)
             elif tasto in (10, 13) and len(punti) >= 2:
                 applica(cfg, chiave, list(punti))
                 break
-    salva(cfg, cfg_path)
+    salva(radice, cfg, cam_id, cfg_path)
 
 
 def applica(cfg, chiave, pts):
@@ -118,8 +134,27 @@ def applica(cfg, chiave, pts):
         cfg[sezione][nome] = pts
 
 
-def salva(cfg, cfg_path):
-    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+def attraversamenti(radice, cam, cam_id):
+    """Un attraversamento per ogni zona crosswalk* della camera che non ne ha ancora uno."""
+    zone = cam.get("zones") or {}
+    lista = radice.setdefault("crosswalks", [])
+    gia = {(c.get("camera", cam_id), c.get("zone")) for c in lista if isinstance(c, dict)}
+    for z in sorted((z for z in zone if z.startswith("crosswalk")), key=lambda z: (z != "crosswalk", z)):
+        if (cam_id, z) in gia:
+            continue
+        suff = z[len("crosswalk"):]
+        validi = (suff,) if suff else ("", "_dx")
+        attesa = [a for a in zone if a.startswith("waiting_area") and a[len("waiting_area"):] in validi]
+        i = len(lista)
+        lista.append({"id": i, "camera": cam_id, "zone": z, "waiting": attesa or None,
+                      "curb": i if i < 4 else None, "light": i if i < 4 else None, "left": "via", "right": "incrocio"})
+        print(f"  attraversamento {i}: {z} (attesa {attesa or 'nessuna'}, sensore {i}, canale luce {i})")
+
+
+def salva(radice, cam, cam_id, cfg_path):
+    if radice is not cam:
+        attraversamenti(radice, cam, cam_id)
+    cfg_path.write_text(json.dumps(radice, indent=2, ensure_ascii=False), encoding="utf-8")
     cv2.destroyAllWindows()
     print(f"\nsalvato in {cfg_path}")
 
