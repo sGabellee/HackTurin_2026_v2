@@ -732,7 +732,7 @@ def test_peer_to_peer():
 
 
 @test
-def test_api_e_pagina_telefono():
+def test_api_locale():
     from node import Node
     with tempfile.TemporaryDirectory() as tmp:
         cfg = node_cfg("incrocio-1", api={"enabled": True, "host": "127.0.0.1", "port": 0},
@@ -746,8 +746,7 @@ def test_api_e_pagina_telefono():
             check("api: eventi", any(e.get("kind") == "bike_lane_invasion" for e in http_json(base + "/api/events")))
             check("api: tracce", http_json(base + "/api/tracks"))
             check("api: config senza token", "segreto" not in json.dumps(http_json(base + "/api/config")))
-            with urllib.request.urlopen(base + "/app", timeout=5) as r:
-                check("api: pagina telefono su /app", b"<html" in r.read(3000).lower())
+            check("api: export con cursore", "cursor" in http_json(base + "/api/export"))
         finally:
             node.close()
 
@@ -779,7 +778,7 @@ def main():
                test_coda, test_pedoni, test_movimento_vietato, test_semaforo, test_cicli_di_vita,
                test_regole_senza_calibrazione, test_riepiloghi, test_robustezza, test_configurazione,
                test_nodo_e_server, test_led_tempo_reale, test_led_pericolo_si_spegne,
-               test_inoltro_percorsi, test_bracciale, test_token_e_env, test_peer_to_peer, test_api_e_pagina_telefono,
+               test_inoltro_percorsi, test_bracciale, test_token_e_env, test_peer_to_peer, test_api_locale,
                test_fusione_due_camere):
         print(f"\n== {fn.__name__}")
         fn()
