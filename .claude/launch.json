@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {"name": "cross-sim", "runtimeExecutable": "C:/Users/Gabriele/Desktop/Hackaton/dataset/.venv/Scripts/python.exe",
+     "runtimeArgs": ["-u", "src/node/tools/simulate_city.py", "--scenario", "demo", "--loop", "--nodes", "462", "--port", "8200", "--udp"],
+     "port": 8200},
+    {"name": "cross-collector", "runtimeExecutable": "C:/Users/Gabriele/Desktop/Hackaton/dataset/.venv/Scripts/python.exe",
+     "runtimeArgs": ["-u", "src/collector/collector.py", "--config", "src/collector/collector_sim.json", "--port", "8000", "--host", "127.0.0.1", "--pull"],
+     "port": 8000}
+  ]
+}

@@ -291,7 +291,7 @@ li scarta (si risparmia l'elaborazione Python; il risparmio pieno richiede lo st
 ### 2.12 `config.json` (v2)
 ```jsonc
 {
-  "node_id": "incrocio-42",
+  "node_id": "incrocio-124",                        // Via Bricherasio / Via Vela, l'incrocio del prototipo
   "position": {"lat": 45.06536, "lon": 7.66689},
   "topology": "topology.json",                       // copia locale della topologia della città
   "cameras": {"cam0": {"frame_size": [640, 480], "zones": {...}, "lanes": {...}, "approaches": {...},
@@ -299,7 +299,7 @@ li scarta (si risparmia l'elaborazione Python; il risparmio pieno richiede lo st
   "crosswalks": [{"id": 0, "camera": "cam0", "zone": "crosswalk", "waiting": "waiting_area",
                   "curb": 0, "light": 0, "left": "via", "right": "incrocio"}],
   "power":   {"enabled": true, "active_hold_s": 20, "cooldown_s": 5, "boot_active_s": 30,
-              "wake_on_radio": true, "wake_roles": ["blind", "emergency"],
+              "wake_on_radio": true, "wake_roles": ["pedestrian", "blind", "cyclist", "emergency"],
               "sample_every_s": 0, "sample_s": 10, "power_w": {"sleep": 2.5, "active": 9.0, "cooldown": 9.0}},
   "mcu":     {"sensor_poll_s": 0.25, "curbs": 1, "distance_poll_s": 2.0},
   "signals": {"roles": ["hazard", "cyclist", "person", "emergency"], "channels": 1, "ttl_ms": 3000, "refresh_s": 1.0},
@@ -369,10 +369,10 @@ class SimRadioBus:                                     # per il simulatore e i t
 `topology.json` (generato da OpenStreetMap, © OpenStreetMap contributors, licenza ODbL):
 ```jsonc
 {"version": 2, "source": "OpenStreetMap (ODbL)", "bbox": [s, w, n, e], "generated": "...",
- "nodes": {"incrocio-42": {"name": "Via Vincenzo Vela / Corso Stati Uniti", "lat": 45.065, "lon": 7.667,
-           "osm": 123456, "streets": ["Via Vincenzo Vela", "Corso Stati Uniti"],
-           "neighbors": {"incrocio-17": {"bearing": 223.5, "street": "Corso Stati Uniti", "m": 92.0}}}},
- "edges": [{"a": "incrocio-42", "b": "incrocio-17", "street": "Corso Stati Uniti", "m": 92.0,
+ "nodes": {"incrocio-124": {"name": "Via Giovanni Battista Bricherasio / Via Vincenzo Vela", "lat": 45.065263, "lon": 7.666883,
+           "osm": 123456, "streets": ["Via Giovanni Battista Bricherasio", "Via Vincenzo Vela"],
+           "neighbors": {"incrocio-134": {"bearing": 207.0, "street": "Via Giovanni Battista Bricherasio", "m": 97.0}}}},
+ "edges": [{"a": "incrocio-124", "b": "incrocio-134", "street": "Via Giovanni Battista Bricherasio", "m": 97.0,
             "geom": [[45.065, 7.667], [45.0649, 7.6668]]}]}
 ```
 `route.py`:
@@ -405,7 +405,7 @@ attraversamenti, Tag vicini, peer) e `GET /api/health`.
 
 ### 5.2 Collettore — `collector.py`
 - Solo libreria standard. `python collector.py --config collector.json --port 8000`.
-- `collector.json`: `{"topology": "...", "nodes": {"incrocio-42": "http://192.168.1.50:8100", ...},
+- `collector.json`: `{"topology": "...", "nodes": {"incrocio-124": "http://192.168.1.50:8100", ...},
   "pull": {"mode": "manual" | "interval", "interval_s": 600}, "listen": {"udp": true, "serial": ""},
   "db": "collector.db"}`.
 - **Pull**: su richiesta (`POST /api/pull`, opzionale `{"nodes": [...]}`) o a intervallo, per ogni nodo:
@@ -460,7 +460,31 @@ collettore li scarica come nodi veri. Scenari: `blind_crossing`, `ambulance_rout
 `pedestrian_night` (risveglio dal bordo), `demo` (tutti in sequenza).
 
 ## 8. Prove
-`src/node/tools/test_suite.py` copre: energia (stati, risvegli, guasto sensore), segnali (LED + codici
-luce), attraversamenti (stati, `safe`, mai via libera con camera ferma), utenti (avvisi per ruolo, ritmo,
-non vedente, soccorso), protocollo v2 (dimensioni, firma, dedup, rilancio, ponte tra trasporti, bus
-virtuale a più salti), instradamento, nodo intero, export/pull del collettore, simulazione breve di città.
+`python src/node/tools/run_tests.py` lancia tutti i test (13 script). `test_suite.py`: regole di situazione, configurazione, .env,
+radio UDP tra due nodi, API locale, fusione tra camere. In `src/node/tools/tests/`: `test_power` (stati di energia, risvegli,
+guasto sensore), `test_signals` (LED + codici luce), `test_crosswalk` (stati delle strisce, mai via libera con camera ferma),
+`test_users` (avvisi per ruolo, ritmo, non vedente, soccorso), `test_situation_v2` (più strisce, `crossing_view`), `test_peer`
+(dimensioni, firma, dedup, rilancio, ponte tra trasporti, bus virtuale a più salti), `test_route` e `test_topology`
+(instradamento e mappa OSM), `test_collector` e `test_export` (pull con cursore, API della dashboard, ascolto UDP), `test_node`
+(nodo intero con MCU finto: energia, strisce, Tag, corridoio di emergenza tra due incroci, `rq`/`rs`), `test_city` (scenari del
+simulatore su 30 incroci).
+
+## 9. Scelte prese in implementazione (rispetto al testo sopra)
+- **Incrocio del prototipo**: "Via Vela / Corso Stati Uniti" non esiste in OpenStreetMap (le due vie sono parallele). La board
+  (45,06536, 7,66689) è `incrocio-124`, Via Bricherasio / Via Vela, a 11 m. Gli id dipendono dai dati OSM: dopo aver rigenerato
+  `topology.json` vanno riallineati `node_id` nei config e nel `collector.json`.
+- **`topology.json`**: in più rispetto a §4 i campi `osm_base`, `params` e, su ogni arco, `oneway`; `source` è "© OpenStreetMap
+  contributors, ODbL". Il raggruppamento ha regole in più (rotatorie fino a 120 m, due gruppi entro 60 m con due strade in comune).
+- **Cursore di export**: oltre a `e/t/s/u` ha `d<id archivio>` (archivio ricreato) e `m` (tabella messaggi), risposta con `count`,
+  `reset` ed `error`. Resta opaco per il collettore.
+- **`near_rssi`**: si scrive in `users` e `config.py` lo copia in `p2p` per `PeerLink`.
+- **Messaggi `hz`**: l'id può essere accorciato in `~resto` per stare in 240 byte; chi riceve lo ricostruisce (`peer.expand_id`).
+  Gli `adv` portano `sig` se c'è `p2p.key`: il Tag lo ignora.
+- **Risveglio**: `power.wake_roles` di default include anche pedone e ciclista (il non vedente e il soccorso restano i casi critici).
+  `poll_sensors() == None` per più di `power.sensor_missing_s` (5 s) conta come guasto del sensore: il nodo resta sveglio.
+- **Freschezza della vista**: `crossing_view` conta solo i fotogrammi veri (`SituationEngine.update(..., frame=False)` per i giri a
+  vuoto) e il nodo azzera il fotogramma quando va a riposo: al risveglio la camera non "vede" finché non arriva un fotogramma nuovo.
+- **Collettore**: non invia `rq` via radio (è solo in ascolto); le risposte `rs` le riceve se qualcun altro le provoca. Le liste
+  lunghe della dashboard (strisce, energia, raccolta, registro) mostrano le prime righe più rilevanti e il resto a richiesta.
+- **Simulatore**: `--fast` accelera il tempo ma il protocollo radio riallinea gli orologi sfasati oltre 5 s, quindi l'inoltro dei
+  pericoli tra incroci va provato in tempo reale. Il simulatore scrive `src/collector/collector_sim.json`.

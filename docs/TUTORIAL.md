@@ -1,7 +1,9 @@
 # Tutorial completo: dal dataset al nodo funzionante sulla board
 
 Seguite le fasi **in ordine**. Ogni fase finisce con un ✅ **controllo**: se non è verde, fermatevi e risolvete prima di andare avanti (in fondo c'è la tabella dei problemi frequenti).
-Le spiegazioni sul *perché* delle cose sono in [PIANO.md](PIANO.md); qui c'è solo il *cosa fare*.
+Le spiegazioni sul *perché* delle cose sono in [ARCHITETTURA.md](ARCHITETTURA.md); qui c'è solo il *cosa fare*.
+
+> **Versione 2.** Le fasi 1–3 (dataset, addestramento, modello sulla board) valgono ancora. Dalla fase 5 in poi il nodo e la sua configurazione sono cambiati (niente server, radio ESP-NOW, risparmio energetico): seguite [GUIDA.md](GUIDA.md). La fase 9 ("Collegare il server") non esiste più: il collettore scarica i dati dai nodi quando serve.
 
 | Fase | Cosa | Dove | Tempo |
 |---|---|---|---|
@@ -301,7 +303,7 @@ ssh efesto "tail -n 20 ~/ArduinoApps/efesto/python/events.jsonl"
 > - uno **schermo** davanti alla camera con video di traffico vero, per le regole sulle auto;
 > - una **strada di nastro sul pavimento**, con voi che fate i pedoni e i ciclisti.
 >
-> Dettagli in PIANO.md, sezione 5.
+> Dettagli in ARCHITETTURA.md.
 
 ---
 

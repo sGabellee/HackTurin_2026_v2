@@ -83,6 +83,7 @@ section { padding-top: 8px; }
 .sec .mark { flex: none; width: 22px; height: 10px; background: linear-gradient(90deg, var(--blue) 50%, var(--red) 50%); }
 .guide { margin: 4px 0 18px; max-width: 780px; color: var(--muted); }
 .sub { margin: 30px 0 8px; padding-top: 10px; border-top: 2px solid var(--ink); }
+.more { margin: 12px 0 0; font-size: 14px; }
 .empty { margin: 8px 0; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--muted); }
 .row-figs { list-style: none; margin: 4px 0 6px; padding: 0; display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); }
 .row-figs li { flex: 1 1 140px; padding: 14px 16px 12px 0; }
@@ -415,8 +416,16 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
         '</span><span class="lab">' + esc(f[1]) + '</span></li>';
     }).join('');
   }
+  // Liste lunghe (una riga per incrocio, 462 in città): le prime opts.limit, le altre dietro un pulsante.
+  function moreBtn(opts, total, cut) {
+    if (!opts.limit || total <= opts.limit) return '';
+    return '<p class="more"><span class="muted">' + (cut ? 'Prime ' + opts.limit + ' di ' + total + '.' : 'Tutte le ' + total + ' righe.') +
+      '</span> <button type="button" data-more="' + opts.key + '">' + (cut ? 'Mostra tutte' : 'Mostra meno') + '</button></p>';
+  }
   function table(cols, rows, opts) {
     opts = opts || {};
+    var total = rows.length, cut = !!opts.limit && !S.expanded[opts.key] && total > opts.limit;
+    if (cut) rows = rows.slice(0, opts.limit);
     var h = '<table class="rows"><thead><tr>' + cols.map(function (c) { return '<th class="lab">' + esc(c) + '</th>'; }).join('') +
       '</tr></thead><tbody>';
     rows.forEach(function (r) {
@@ -426,7 +435,7 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
       });
       h += '</tr>';
     });
-    return h + '</tbody></table>';
+    return h + '</tbody></table>' + moreBtn(opts, total, cut);
   }
   function bars(list, max, color) {
     if (!list.length) return '';
@@ -442,8 +451,15 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
   var S = {
     overview: null, map: null, rev: null, hazards: [], cross: null, users: null, energy: null, nodes: [], pull: null,
     events: [], lastSeq: null, selected: null, ok: false, lastOk: 0, nodeIndex: {}, cardEvents: [], busy: false,
-    pulling: {}
+    pulling: {}, expanded: {}
   };
+  document.addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('button[data-more]') : null;
+    if (!b) return;
+    var key = b.getAttribute('data-more');
+    S.expanded[key] = !S.expanded[key];
+    render();
+  });
 
   function getJSON(url, opt) {
     return fetch(url, Object.assign({ cache: 'no-store' }, opt || {})).then(function (r) {
@@ -952,14 +968,16 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
       box.innerHTML = empty('Nessun dato sulle strisce: arriva con il pull dei nodi (pulsante «Scarica ora» in Raccolta dati).');
       return;
     }
-    box.innerHTML = table(['Incrocio', 'Strisce', 'Stato', 'Luce', 'Via libera', 'Veicolo più vicino', 'Dato'], c.items.map(function (x) {
+    var XRANK = { emergency: 6, conflict: 5, attention: 4, unknown: 3, assist: 2, occupied: 1 };
+    var items = c.items.slice().sort(function (a, b) { return (XRANK[b.state] || 0) - (XRANK[a.state] || 0) || (a.stale ? 1 : 0) - (b.stale ? 1 : 0); });
+    box.innerHTML = table(['Incrocio', 'Strisce', 'Stato', 'Luce', 'Via libera', 'Veicolo più vicino', 'Dato'], items.map(function (x) {
       var cls = x.state === 'conflict' || x.state === 'emergency' ? 'st-hazard' : (x.state === 'attention' || x.state === 'unknown' ? 'st-emergency' : '');
       return { id: x.node, cls: 'clickable' + (x.stale ? ' is-stale' : ''), numeric: [1, 5], cells: [
         esc(x.name), esc(x.id), '<b class="' + cls + '">' + esc(XSTATE[x.state] || x.state || '–') + '</b>',
         esc(LIGHT[x.light] || x.light || '–'), x.safe ? 'sì' : 'no',
         x.min_eta_s != null ? num(x.min_eta_s, 1) + ' s' : '–', x.stale ? 'vecchio, ' + agoS(x.age_s) : agoS(x.age_s)
       ] };
-    }));
+    }), { limit: 12, key: 'cross' });
     bindRows(box);
   }
 
@@ -1007,10 +1025,14 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
     var bs = t.by_source || {}, keys = Object.keys(bs).filter(function (k) { return bs[k] > 0; }).sort(function (a, b) { return bs[b] - bs[a]; });
     $('wake').innerHTML = keys.length ? bars(keys.map(function (k) { return { label: esc(WAKE[k] || k), value: bs[k], text: num(bs[k], 0), color: k === 'sensor_fault' ? 'red' : '' }; }))
       : empty(t.nodes ? 'Nessun risveglio registrato.' : 'Nessun dato di energia: arriva con il pull dei nodi.');
-    $('energy-nodes').innerHTML = e.nodes.length ? bars(e.nodes.map(function (n) {
+    var en = e.nodes.slice().sort(function (a, b) {
+      return (a.state === 'sleep' ? 1 : 0) - (b.state === 'sleep' ? 1 : 0) || (a.rest_pct == null ? 101 : a.rest_pct) - (b.rest_pct == null ? 101 : b.rest_pct);
+    });
+    var eopt = { limit: 12, key: 'energy' }, ecut = !S.expanded.energy && en.length > eopt.limit;
+    $('energy-nodes').innerHTML = en.length ? bars((ecut ? en.slice(0, eopt.limit) : en).map(function (n) {
       return { label: '<b>' + esc(n.name) + '</b> <span class="muted">' + esc(POWER[n.state] || '') + '</span>', value: n.rest_pct || 0,
         text: (n.rest_pct != null ? num(n.rest_pct, 0) + '% a riposo' : '–') + ' · ' + wh(n.saved_wh).join(' ') };
-    }), 100) : empty('Nessun incrocio ha ancora mandato i dati di energia.');
+    }), 100) + moreBtn(eopt, en.length, ecut) : empty('Nessun incrocio ha ancora mandato i dati di energia.');
   }
 
   // ------------------------------------------------------------------ raccolta dati
@@ -1027,6 +1049,8 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
     var box = $('pull-table');
     // prima i nodi configurati (si possono scaricare), poi quelli sentiti solo via radio
     var rows = configured.concat(S.nodes.filter(function (n) { return !n.configured && n.source !== 'none'; }));
+    var prio = function (n) { var p = n.pull || {}; return (running.indexOf(n.id) >= 0 || S.pulling[n.id]) ? 0 : (n.configured && p.last_ms && !p.ok ? 1 : (n.configured && !p.last_ms ? 2 : 3)); };
+    rows = rows.map(function (n, i) { return [n, i]; }).sort(function (a, b) { return prio(a[0]) - prio(b[0]) || a[1] - b[1]; }).map(function (x) { return x[0]; });
     if (!rows.length) {
       box.innerHTML = empty('Nessun nodo configurato: aggiungi gli indirizzi dei nodi in "nodes" di collector.json e riavvia il collettore.');
     } else {
@@ -1046,7 +1070,7 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
           n.configured ? (p.errors ? num(p.errors, 0) : '0') : '–',
           n.configured ? '<button type="button" data-pull="' + esc(n.id) + '"' + (run ? ' disabled' : '') + '>' + (run ? 'In corso…' : 'Scarica ora') + '</button>' : ''
         ] };
-      }));
+      }), { limit: 12, key: 'pull' });
       Array.prototype.forEach.call(box.querySelectorAll('button[data-pull]'), function (b) {
         b.addEventListener('click', function () { pullNow([b.getAttribute('data-pull')]); });
       });
@@ -1092,11 +1116,13 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
   function renderLog() {
     var box = $('log');
     if (!S.events.length) { box.innerHTML = '<li class="empty" style="display:block">Il registro è vuoto: gli eventi arrivano con il pull dei nodi o dalla radio.</li>'; return; }
-    var sig = S.events.length + ':' + S.events[S.events.length - 1].seq;
+    var sig = S.events.length + ':' + S.events[S.events.length - 1].seq + ':' + (S.expanded.log ? 1 : 0);
     if (box.dataset.sig === sig) return;
     box.dataset.sig = sig;
     var list = S.events.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0) || b.seq - a.seq; }).slice(0, 200);
-    box.innerHTML = list.map(logRow).join('');
+    var lopt = { limit: 25, key: 'log' }, lcut = !S.expanded.log && list.length > lopt.limit;
+    box.innerHTML = (lcut ? list.slice(0, lopt.limit) : list).map(logRow).join('') +
+      (list.length > lopt.limit ? '<li style="display:block;border:0;padding:0">' + moreBtn(lopt, list.length, lcut) + '</li>' : '');
   }
 
   loop();

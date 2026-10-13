@@ -23,6 +23,9 @@ Con --udp il collettore in ascolto vede la radio in diretta. Per la dashboard, i
   python src/collector/collector.py --config src/collector/collector_sim.json --port 8000
 (collector_sim.json viene scritto all'avvio con gli indirizzi delle API dei nodi: /n/<id>/api/...).
 I log dei nodi vanno in <out>/sim.log; a schermo solo il racconto degli scenari.
+--fast serve a provare in pochi secondi: il tempo simulato corre davanti a quello reale e il protocollo
+radio (peer.py) riallinea gli orologi sfasati oltre 5 s, quindi in --fast i pericoli inoltrati tra incroci
+possono scadere subito. Per vedere l'inoltro dei pericoli usare il tempo reale (default).
 """
 import argparse
 import contextlib
