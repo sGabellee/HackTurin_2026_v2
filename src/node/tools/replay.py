@@ -112,8 +112,17 @@ def main():
     ap.add_argument("--no-show", action="store_true")
     args = ap.parse_args()
 
+    src = Path(args.sorgente)
+    if not src.exists():
+        sys.exit(f"Non trovo '{args.sorgente}'. Indica il percorso di un VIDEO vero (mp4, mov...) o di una cartella di "
+                 f"immagini, per esempio:  python replay.py C:\\video\\incrocio.mp4  (il nome video.mp4 negli esempi e' solo un segnaposto).")
+    primo = next(frames(args.sorgente, args.fps), None)
+    if primo is None:
+        sys.exit(f"'{args.sorgente}' non contiene fotogrammi leggibili: controlla che sia un video valido "
+                 f"(prova ad aprirlo con un lettore) o una cartella con immagini jpg/png.")
+
     if args.snapshot:
-        _, frame = next(frames(args.sorgente, args.fps))
+        _, frame = primo
         cv2.imwrite(args.snapshot, frame)
         print(f"salvato {args.snapshot}: usalo con zone_editor.py")
         return
@@ -135,7 +144,7 @@ def main():
     cam = cfg["_cameras"][cam_id]
     ruoli = cfg["signals"]["roles"]
     model = YOLO(args.model)
-    writer, banner, ultimo_tick = None, [], None
+    writer, banner, ultimo_tick, tv = None, [], None, 0.0
     t_start = time.time()  # il video viene "ambientato" adesso, cosi' le scadenze tornano
 
     try:

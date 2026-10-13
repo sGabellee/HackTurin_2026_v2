@@ -210,6 +210,26 @@ def test_guasto_sensore(c):
     check("nome dell'incrocio dalla topologia", snap["name"] and snap["name"] == TOPO.name(A), snap["name"])
 
 
+def test_id_cambiati(tmp):
+    print("== id degli incroci cambiati (mappa rigenerata)")
+    lat, lon = TOPO.pos(A)
+    cfg = cfg_nodo(A, tmp)
+    cfg["node_id"], cfg["position"] = "incrocio-9999", {"lat": lat, "lon": lon}
+    n = Node(cfg, base_dir=tmp, start_threads=False, mcu=FakeMCU({"curbs": 1}), topology=TOPO)
+    try:
+        check("node_id inesistente: si usa l'incrocio piu' vicino alla posizione", n.node_id == A, n.node_id)
+        check("anche la config lo sa", n.cfg["node_id"] == A)
+        check("posizione e nome dalla topologia", n.status_snapshot()["name"] == TOPO.name(A))
+    finally:
+        n.close()
+    cfg["node_id"], cfg["position"] = "incrocio-9999", {"lat": lat + 0.01, "lon": lon}   # 1 km piu' in la': nessuna correzione
+    n = Node(cfg, base_dir=tmp, start_threads=False, mcu=FakeMCU({"curbs": 1}), topology=TOPO)
+    try:
+        check("posizione lontana da ogni incrocio: nessuna correzione", n.node_id == "incrocio-9999", n.node_id)
+    finally:
+        n.close()
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         c = Citta(tmp)
@@ -223,6 +243,11 @@ def main():
                     check(f"{f.__name__} senza eccezioni", False, repr(e))
         finally:
             c.close()
+        try:
+            test_id_cambiati(tmp)
+        except Exception as e:
+            traceback.print_exc()
+            check("test_id_cambiati senza eccezioni", False, repr(e))
     ok = sum(1 for r in RISULTATI if r[1])
     print(f"\n{ok}/{len(RISULTATI)} controlli OK")
     for nome, esito, info in RISULTATI:

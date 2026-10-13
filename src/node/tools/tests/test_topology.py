@@ -579,7 +579,19 @@ def test_id_stabili_tra_esecuzioni():
             if nome.startswith("dati OSM") and ok and TOPOLOGY.exists():
                 salvato = json.loads(TOPOLOGY.read_text(encoding="utf-8"))
                 check("topology.json uguale a quello rigenerato in un altro processo",
-                      salvato["nodes"] == uscite[0]["nodes"] and salvato["edges"] == uscite[0]["edges"])
+                      quasi_uguali(salvato["nodes"], uscite[0]["nodes"]) and quasi_uguali(salvato["edges"], uscite[0]["edges"]))
+
+
+def quasi_uguali(a, b, chiave=None):
+    """Confronto strutturale: stessi id, nomi, vicini; numeri uguali a meno dell'arrotondamento (coordinate 2e-6 gradi,
+    metri e direzioni 0,25). Un file scritto prima che la somma dei centri fosse ordinata puo' differire di 1e-6."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(quasi_uguali(a[k], b[k], k) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(quasi_uguali(x, y, chiave) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float):
+        return abs(a - b) <= (2e-6 if chiave in ("lat", "lon", "geom") else 0.25)
+    return a == b
 
 
 # ---------------------------------------------------------------------- download e riga di comando
@@ -809,7 +821,7 @@ def test_file_generato():
         nuovo = bt.build_topology(bt.load_osm(bt.DEFAULT_INPUT), bbox=tuple(topo["bbox"]),
                                   **{k: p[k] for k in bt.DEFAULTS if k in p})
         check("topology.json allineato ai dati OSM e al generatore (rigenerato uguale)",
-              nuovo["nodes"] == nodes and nuovo["edges"] == edges,
+              quasi_uguali(nuovo["nodes"], nodes) and quasi_uguali(nuovo["edges"], edges),
               "rigenerare con: python build_topology.py")
     else:
         print(f"      (dati OSM {bt.DEFAULT_INPUT} assenti: confronto con la rigenerazione saltato)")

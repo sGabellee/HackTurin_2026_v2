@@ -59,7 +59,9 @@ def main():
         cfg = radice
     immagine = cv2.imread(str(foto))
     if immagine is None:
-        sys.exit(f"non riesco ad aprire {foto}")
+        sys.exit(f"Non riesco ad aprire '{foto}': il file non esiste o non e' un'immagine. Crealo dal tuo video con\n"
+                 f"  python replay.py <percorso del video> --snapshot foto.png\n"
+                 f"oppure usa uno screenshot dell'inquadratura della camera (PNG o JPG).")
     scala = min(1.0, 1280 / immagine.shape[1])
     immagine = cv2.resize(immagine, None, fx=scala, fy=scala)
     h, w = immagine.shape[:2]

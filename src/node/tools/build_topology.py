@@ -60,7 +60,10 @@ from pathlib import Path
 
 QUI = Path(__file__).resolve().parent
 REPO = QUI.parents[2]
-DEFAULT_INPUT = REPO / "data" / "osm" / "torino_crocetta.json"
+# dati OSM di partenza: l'ultimo scaricato (zona.json, quello da cui nasce topology.json), altrimenti il primo (torino_crocetta.json)
+_OSM = REPO / "data" / "osm"
+DEFAULT_INPUT = next((p for p in (_OSM / "zona.json", _OSM / "torino_crocetta.json") if p.exists()),
+                     _OSM / "torino_crocetta.json")
 DEFAULT_OUT = QUI.parent / "python" / "topology.json"
 DEFAULT_BBOX = (45.055, 7.655, 45.072, 7.685)      # Crocetta / San Secondo / Centro (s, w, n, e)
 VIA_VELA = (45.06536, 7.66689)                     # board del prototipo, Via Vincenzo Vela (verso Corso Stati Uniti)
@@ -516,7 +519,8 @@ def build_topology(osm, bbox=None, cluster_m=DEFAULTS["cluster_m"], max_span_m=D
                    max(math.dist(pxy[i], pxy[j]) for i in membri[ra] for j in membri[rb]))
 
     def centro(ms):
-        return (sum(xy[m][0] for m in ms) / len(ms), sum(xy[m][1] for m in ms) / len(ms))
+        ms = sorted(ms, key=str)   # ordine fisso: la somma in virgola mobile non dipende dall'hash dei set
+        return (math.fsum(xy[m][0] for m in ms) / len(ms), math.fsum(xy[m][1] for m in ms) / len(ms))
 
     # rotatorie: tutti i punti d'incrocio sull'anello diventano un incrocio solo
     rb_uf = _UF([nid for nid in adj if any(ways[wi].rb for wi in ways_at[nid])])

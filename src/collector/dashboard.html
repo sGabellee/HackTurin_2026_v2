@@ -774,6 +774,22 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
     applyView();
   }
 
+  // Tracciato di piu' tratti: un tratto che non continua il precedente riparte con "M" (mai una retta tra tratti
+  // non consecutivi, che taglierebbe gli isolati)
+  function segPath(list) {
+    var d = '', end = null;
+    list.forEach(function (pts) {
+      if (!pts.length) return;
+      var cont = end && Math.hypot(pts[0][0] - end[0], pts[0][1] - end[1]) < 1.5;
+      pts.forEach(function (q, j) {
+        if (j === 0 && cont) return;
+        d += (j === 0 ? 'M' : 'L') + q[0].toFixed(1) + ' ' + q[1].toFixed(1);
+      });
+      end = pts[pts.length - 1];
+    });
+    return d;
+  }
+
   function syncRoutes() {
     var key = S.hazards.map(function (h) { return h.key + ':' + (h.segments || []).length + ':' + h.category; }).join('|');
     if (key === M.routeKey) return;
@@ -789,9 +805,7 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
         for (var i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
         return { pts: pts, len: len };
       });
-      var all = [];
-      segs.forEach(function (s, i) { s.pts.forEach(function (p, j) { all.push((i === 0 && j === 0 ? 'M' : 'L') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)); }); });
-      el('path', { 'class': 'route-base', d: all.join('') }, g);
+      el('path', { 'class': 'route-base', d: segPath(segs.map(function (s) { return s.pts; })) }, g);
       var draw = el('path', { 'class': 'route-draw', d: '' }, g);
       var head = marker(g, segs[0].pts[0][0], segs[0].pts[0][1], 'headg');
       head.head = true;
@@ -814,20 +828,21 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
       M.routes.forEach(function (r) {
         var n = r.segs.length, cycle = n * STEP + PAUSE;
         var p = reduced ? n : Math.min(n, (t % cycle) / STEP);
-        var full = Math.floor(p), frac = p - full, d = [], last = null;
-        for (var i = 0; i < Math.min(full, n); i++) r.segs[i].pts.forEach(function (q) { d.push(q); });
+        var full = Math.floor(p), frac = p - full, lists = [], last = null;
+        for (var i = 0; i < Math.min(full, n); i++) lists.push(r.segs[i].pts);
         if (full < n) {
-          var s = r.segs[full], L = s.len[s.len.length - 1] * frac;
-          d.push(s.pts[0]);
+          var s = r.segs[full], L = s.len[s.len.length - 1] * frac, part = [s.pts[0]];
           for (var j = 1; j < s.pts.length; j++) {
-            if (s.len[j] <= L) { d.push(s.pts[j]); continue; }
+            if (s.len[j] <= L) { part.push(s.pts[j]); continue; }
             var u = (L - s.len[j - 1]) / Math.max(1e-6, s.len[j] - s.len[j - 1]);
-            d.push([s.pts[j - 1][0] + (s.pts[j][0] - s.pts[j - 1][0]) * u, s.pts[j - 1][1] + (s.pts[j][1] - s.pts[j - 1][1]) * u]);
+            part.push([s.pts[j - 1][0] + (s.pts[j][0] - s.pts[j - 1][0]) * u, s.pts[j - 1][1] + (s.pts[j][1] - s.pts[j - 1][1]) * u]);
             break;
           }
+          lists.push(part);
         }
-        last = d.length ? d[d.length - 1] : r.segs[0].pts[0];
-        r.draw.setAttribute('d', d.length > 1 ? 'M' + d.map(function (q) { return q[0].toFixed(1) + ' ' + q[1].toFixed(1); }).join('L') : '');
+        var tail = lists.length ? lists[lists.length - 1] : r.segs[0].pts;
+        last = tail[tail.length - 1];
+        r.draw.setAttribute('d', segPath(lists));
         r.head.x = last[0]; r.head.y = last[1];
         r.head.g.setAttribute('transform', 'translate(' + last[0].toFixed(1) + ' ' + last[1].toFixed(1) + ') scale(' + kk.toFixed(4) + ')');
       });

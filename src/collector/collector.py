@@ -1263,8 +1263,19 @@ class Collector:
         if res["ok"]:
             log(f"pull {nid}: {res['items']} elementi nuovi in {res['pages']} pagine ({res['duration_ms']} ms)"
                 + (", ne restano altri" if res["more"] else ""))
+            self._fail_log = {}
         else:
-            log(f"pull {nid} non riuscito: {res['error']}")
+            # molti nodi con lo stesso errore (di solito: simulatore o nodi spenti): 3 righe e poi una nota sola
+            fl = getattr(self, "_fail_log", None)
+            if fl is None:
+                fl = self._fail_log = {}
+            n = fl[res["error"]] = fl.get(res["error"], 0) + 1
+            if n <= 3:
+                log(f"pull {nid} non riuscito: {res['error']}")
+            elif n == 4:
+                log(f"... lo stesso errore su altri nodi ({res['error']}): non lo ripeto. Controlla che i nodi siano accesi "
+                    f"e raggiungibili; con il simulatore avvia prima simulate_city.py. Il dettaglio per nodo e' in "
+                    f"«Raccolta dati» nella dashboard.")
         return res
 
     def _pull_status(self, nid, url):

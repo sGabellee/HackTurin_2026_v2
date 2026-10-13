@@ -489,6 +489,11 @@ def avvia_api(citta, host, port):
 
 def scrivi_collector(citta, host, port, udp):
     p = QUI.parents[1] / "collector" / "collector_sim.json"
+    for suff in ("", "-wal", "-shm"):   # archivio del collettore della simulazione: riparte pulito (gli id dei nodi cambiano)
+        try:
+            (p.parent / f"collector_sim.db{suff}").unlink()
+        except OSError:
+            pass
     h = "127.0.0.1" if host in ("0.0.0.0", "") else host
     cfg = {"_note": "Scritto da src/node/tools/simulate_city.py: i nodi sono quelli della simulazione.",
            "title": "CROSS Torino (simulazione)", "topology": "../node/python/topology.json",

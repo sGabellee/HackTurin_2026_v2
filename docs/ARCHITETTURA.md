@@ -291,7 +291,7 @@ li scarta (si risparmia l'elaborazione Python; il risparmio pieno richiede lo st
 ### 2.12 `config.json` (v2)
 ```jsonc
 {
-  "node_id": "incrocio-130",                        // Via Bricherasio / Via Vela, l'incrocio del prototipo (con la mappa attuale)
+  "node_id": "incrocio-124",                        // Via Bricherasio / Via Vela, l'incrocio del prototipo (con la mappa attuale)
   "position": {"lat": 45.06536, "lon": 7.66689},
   "topology": "topology.json",                       // copia locale della topologia della città
   "cameras": {"cam0": {"frame_size": [640, 480], "zones": {...}, "lanes": {...}, "approaches": {...},
@@ -471,7 +471,7 @@ simulatore su 30 incroci).
 
 ## 9. Scelte prese in implementazione (rispetto al testo sopra)
 - **Incrocio del prototipo**: "Via Vela / Corso Stati Uniti" non esiste in OpenStreetMap (le due vie sono parallele). La board
-  (45,06536, 7,66689) è l'incrocio più vicino, Via Bricherasio / Via Vela, a 11 m (`incrocio-124` nella prima mappa generata, `incrocio-130` in quella attuale a 493 incroci). Gli id dipendono dai dati OSM: dopo aver rigenerato
+  (45,06536, 7,66689) è l'incrocio più vicino, Via Bricherasio / Via Vela, a 11 m (gli id cambiano a ogni rigenerazione: `incrocio-124`, `-130`...). Se `node_id` non è nella mappa ma `position` è nella config, il nodo usa l'incrocio più vicino (entro 40 m) e lo dichiara all'avvio. Gli id dipendono dai dati OSM: dopo aver rigenerato
   `topology.json` vanno riallineati `node_id` nei config e nel `collector.json`.
 - **`topology.json`**: in più rispetto a §4 i campi `osm_base`, `params` e, su ogni arco, `oneway`; `source` è "© OpenStreetMap
   contributors, ODbL". Il raggruppamento ha regole in più (rotatorie fino a 120 m, due gruppi entro 60 m con due strade in comune).

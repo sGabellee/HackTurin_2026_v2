@@ -31,7 +31,7 @@ from mcu import MCULink
 from peer import PeerLink
 from power import PowerManager
 from publisher import Publisher
-from route import Topology
+from route import Topology, dist_m
 from signals import SignalController
 from situation import SituationEngine
 from stats import StatsAggregator
@@ -62,6 +62,11 @@ class Node:
         self.power_listeners = []    # f(old, new): main.py avvia/ferma l'inferenza
         self.dropped_frames = 0
 
+        # topologia della citta': prima di tutto, perche' puo' correggere node_id (vedi _resolve_id)
+        self.topology = topology if topology is not None else self._load_topology()
+        self._resolve_id()
+        cfg["node_id"] = self.node_id
+
         self.storage = None
         if data.get("store_db", True):
             try:
@@ -73,8 +78,7 @@ class Node:
                                    base_dir=self.base_dir, store_scene=bool(data.get("store_scene", False)))
         self.health = Health(cfg, self.node_id)
 
-        # topologia della citta' e posizione del nodo
-        self.topology = topology if topology is not None else self._load_topology()
+        # posizione del nodo
         self.position = self._position()
         self._fill_neighbors()
 
@@ -137,6 +141,22 @@ class Node:
         except Exception as e:  # senza topologia: avvisi a tutti i vicini radio, nessun percorso
             print(f"[nodo] topologia {p} non disponibile ({e!r}): pericoli inoltrati senza percorso")
             return None
+
+    def _resolve_id(self):
+        """Gli id degli incroci dipendono dai dati OSM e cambiano se si rigenera la mappa. Se node_id non e' nella
+        topologia ma la config ha la posizione, si usa l'incrocio piu' vicino (entro 40 m) e lo si dichiara."""
+        topo, pos = self.topology, self.cfg.get("position")
+        if topo is None or topo.pos(self.node_id) is not None:
+            return
+        try:
+            near = topo.nearest(float(pos["lat"]), float(pos["lon"]))
+            d = dist_m((float(pos["lat"]), float(pos["lon"])), topo.pos(near)) if near else None
+        except (TypeError, KeyError, ValueError):
+            return
+        if near and d is not None and d <= 40:
+            print(f"[nodo] '{self.node_id}' non e' nella topologia (id cambiati?): uso {near}, il piu' vicino "
+                  f"alla posizione di config ({d:.0f} m). Aggiorna node_id in config.json.")
+            self.node_id = near
 
     def _in_topology(self):
         return self.topology is not None and self.topology.pos(self.node_id) is not None

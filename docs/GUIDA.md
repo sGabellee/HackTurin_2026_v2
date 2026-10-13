@@ -36,6 +36,12 @@ Scenari: `blind_crossing`, `ambulance_route`, `bike_lane`, `pedestrian_night`, `
 Con `--nodes 60` si simulano solo i 60 incroci più vicini alla board (più leggero).
 
 ### 1.3 Un video vero sul nodo (serve `opencv-python` e `ultralytics`)
+Solo per `replay.py` e `zone_editor.py` (il nodo, il collettore e il simulatore non ne hanno bisogno):
+```bash
+pip install opencv-python ultralytics      # una volta sola, nel Python che usate per questi due strumenti
+```
+In questi comandi `video.mp4` e `foto.png` sono nomi di esempio: al posto di `video.mp4` mettete il percorso di un vostro video
+(o di una cartella di immagini); `foto.png` viene creata dal primo comando.
 ```bash
 python replay.py video.mp4 --snapshot foto.png        # primo fotogramma per disegnare le zone
 python zone_editor.py foto.png ..\python\config.json  # disegna strisce, aree d'attesa, ciclabile
@@ -71,7 +77,7 @@ dal monitor seriale (comandi `t`, `i`, `1`..`5`), poi insieme.
 4. Nell'app (`app.yaml`) dichiarare la porta dell'API locale: `ports: [8100]`.
 5. Modificare `config.json`: `node_id` (l'incrocio giusto della mappa), `position`, `cameras` (zone), `crosswalks`, `p2p.serial.port`.
    Per trovare l'incrocio giusto: `python src/node/tools/build_topology.py --verify src/node/python/topology.json --mark 45.0653,7.6669`.
-   Il prototipo (Via Bricherasio / Via Vela) è `incrocio-130` con la mappa attuale (493 incroci); gli id cambiano se si rigenera la mappa.
+   Il prototipo è Via Bricherasio / Via Vela; il suo id dipende dalla mappa (oggi `incrocio-124`) e cambia se la si rigenera: se `node_id` non c'è nella mappa ma `position` è giusta, il nodo usa l'incrocio più vicino e lo scrive all'avvio.
 6. Facoltativo: `.env` accanto a `config.json` con `SC_P2P_KEY` (stessa chiave su tutti i nodi), vedi `.env.example`.
 7. Avviare l'app: al boot il nodo resta sveglio `boot_active_s` (30 s), poi va a riposo; il sensore sul bordo, un Tag vicino
    o un incrocio vicino lo risvegliano. `http://<ip-board>:8100/api/status` mostra energia, strisce, Tag e radio.
