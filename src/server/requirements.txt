@@ -1,3 +1,0 @@
-# server.py usa solo la libreria standard di Python.
-# Flask serve solo per flask_app.py (hosting WSGI, es. PythonAnywhere).
-Flask==3.0.2
