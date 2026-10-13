@@ -132,7 +132,18 @@ table.rows tr.clickable:hover td { background: var(--soft); }
 .mapctl .grow { flex: 1 1 240px; }
 .mapnote { position: absolute; left: 0; right: 0; top: 0; padding: 14px 16px; background: rgba(255,255,255,.92);
   border-bottom: 1px solid var(--line); font-size: 15px; }
-.streets { fill: none; stroke: var(--street); stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+#tiles image { pointer-events: none; }
+.has-tiles .base, .has-tiles .slabel { display: none; }
+.has-tiles .streets { stroke: #3b4a8f; opacity: .6; stroke-width: 1.3; }
+.attrib { position: absolute; right: 0; bottom: 0; padding: 2px 8px; background: rgba(255,255,255,.85); font-size: 11px; color: var(--muted); }
+.base { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.base2 { stroke: #e4e7ef; stroke-width: 2.2; }
+.base1 { stroke: #d6dae6; stroke-width: 3.4; }
+.base0 { stroke: #c9cedd; stroke-width: 5; }
+.streets { fill: none; stroke: #aeb5c8; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.slabel { font-size: 11px; font-weight: 600; fill: var(--muted); text-anchor: middle; dominant-baseline: central; paint-order: stroke;
+  stroke: var(--paper); stroke-width: 3.5px; stroke-linejoin: round; pointer-events: none; letter-spacing: .02em; }
+.slabel.c0 { font-size: 12.5px; font-weight: 700; fill: #3d4566; }
 .n .dot { stroke: var(--paper); stroke-width: 1.4; }
 .n.sleep .dot { fill: var(--gray); }
 .n.awake .dot { fill: var(--blue); }
@@ -228,11 +239,17 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
       dita per lo zoom, trascina per spostarti, tocca un incrocio per aprirne la scheda.</p>
     <div class="mapbox">
       <svg id="map" role="img" aria-label="Mappa degli incroci" xmlns="http://www.w3.org/2000/svg">
+        <g id="tiles"></g>
+        <path class="base base2" id="base2" d=""></path>
+        <path class="base base1" id="base1" d=""></path>
+        <path class="base base0" id="base0" d=""></path>
         <path class="streets" id="streets" d=""></path>
+        <g id="labels"></g>
         <g id="routes"></g>
         <g id="nodes"></g>
         <g id="tags"></g>
       </svg>
+      <div class="attrib" id="attrib" hidden>© OpenStreetMap contributors · openstreetmap.org/copyright</div>
       <div class="mapnote" id="mapnote" hidden></div>
     </div>
     <div class="mapctl">
@@ -451,7 +468,7 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
   var S = {
     overview: null, map: null, rev: null, hazards: [], cross: null, users: null, energy: null, nodes: [], pull: null,
     events: [], lastSeq: null, selected: null, ok: false, lastOk: 0, nodeIndex: {}, cardEvents: [], busy: false,
-    pulling: {}, expanded: {}
+    pulling: {}, expanded: {}, base: null, tiles: null
   };
   document.addEventListener('click', function (ev) {
     var b = ev.target && ev.target.closest ? ev.target.closest('button[data-more]') : null;
@@ -559,7 +576,8 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
 
   // ------------------------------------------------------------------ mappa
   var M = {
-    svg: $('map'), streets: $('streets'), gRoutes: $('routes'), gNodes: $('nodes'), gTags: $('tags'),
+    svg: $('map'), streets: $('streets'), base: [$('base0'), $('base1'), $('base2')], gLabels: $('labels'), labels: [], gTiles: $('tiles'),
+    streets: $('streets'), gRoutes: $('routes'), gNodes: $('nodes'), gTags: $('tags'),
     vb: null, fit: null, P: null, rev: null, nodes: {}, markers: [], routes: [], routeKey: '', tagKey: '', anim: 0
   };
   var SVGNS = 'http://www.w3.org/2000/svg';
@@ -578,6 +596,56 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
     M.svg.setAttribute('viewBox', [M.vb.x, M.vb.y, M.vb.w, M.vb.h].map(function (v) { return v.toFixed(2); }).join(' '));
     var kk = k();
     M.markers.forEach(function (m) { m.g.setAttribute('transform', 'translate(' + m.x.toFixed(2) + ' ' + m.y.toFixed(2) + ') scale(' + kk.toFixed(4) + ')'); });
+    // nomi delle strade: dimensione costante in pixel, i grandi assi sempre, le vie minori solo da vicino
+    var lim = [4.5, 2.0, 1.0];
+    M.labels.forEach(function (l) {
+      var on = kk < lim[l.c];
+      if (on !== l.on) { l.g.setAttribute('display', on ? 'inline' : 'none'); l.on = on; }
+      if (on) l.g.setAttribute('transform', 'translate(' + l.x.toFixed(2) + ' ' + l.y.toFixed(2) + ') rotate(' + l.a + ') scale(' + kk.toFixed(4) + ')');
+    });
+  }
+
+  // sfondo cartografico (tutte le strade e i nomi, da /api/basemap): si carica una volta
+  function drawBase() {
+    var b = S.base;
+    if (!b || !M.P) return;
+    var d = ['', '', ''];
+    (b.ways || []).forEach(function (w) {
+      var s2 = '';
+      w.g.forEach(function (p, i) { var q = proj(p[0], p[1]); s2 += (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1); });
+      d[w.c] += s2;
+    });
+    M.base.forEach(function (p, i) { p.setAttribute('d', d[i]); });
+    M.gLabels.textContent = '';
+    M.labels = (b.labels || []).map(function (l) {
+      var q = proj(l.lat, l.lon);
+      var g = el('g', { display: 'none' }, M.gLabels);
+      var t = el('text', { 'class': 'slabel c' + l.c }, g);
+      t.textContent = l.n;
+      return { g: g, x: q[0], y: q[1], a: l.a, c: l.c, on: false };
+    });
+    if (M.vb) applyView();
+  }
+  // immagine della mappa: le tile di OpenStreetMap salvate sul PC (/tiles/z/x/y.png), ognuna tra i suoi quattro angoli
+  function tileLat(y, z) { var n = Math.PI - 2 * Math.PI * y / Math.pow(2, z); return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); }
+  function drawTiles() {
+    var t = S.tiles;
+    if (!t || !t.tiles || !t.tiles.length || !M.P) return;
+    var z = t.zoom, n = Math.pow(2, z);
+    M.gTiles.textContent = '';
+    t.tiles.forEach(function (c) {
+      var a = proj(tileLat(c[1], z), c[0] / n * 360 - 180), b = proj(tileLat(c[1] + 1, z), (c[0] + 1) / n * 360 - 180);
+      el('image', { href: '/tiles/' + z + '/' + c[0] + '/' + c[1] + '.png', x: a[0].toFixed(2), y: a[1].toFixed(2),
+        width: (b[0] - a[0] + 0.6).toFixed(2), height: (b[1] - a[1] + 0.6).toFixed(2), preserveAspectRatio: 'none' }, M.gTiles);
+    });
+    M.svg.classList.add('has-tiles');
+    $('attrib').hidden = false;
+  }
+  function loadTiles() {
+    getJSON('/api/tiles').then(function (t) { S.tiles = t; drawTiles(); }).catch(function () { setTimeout(loadTiles, 5000); });
+  }
+  function loadBase() {
+    getJSON('/api/basemap').then(function (b) { S.base = b; drawBase(); }).catch(function () { setTimeout(loadBase, 5000); });
   }
   function fitView() {
     if (!M.fit) return;
@@ -625,6 +693,8 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
     });
     M.streets.setAttribute('d', d.join(''));
     fitView();
+    drawBase();
+    drawTiles();
   }
 
   function marker(parent, x, y, cls) {
@@ -1126,6 +1196,8 @@ footer { margin: 70px 0 0; padding: 22px 0 40px; border-top: 6px solid var(--ink
   }
 
   loop();
+  loadBase();
+  loadTiles();
 })();
 </script>
 </body>

@@ -71,7 +71,7 @@ dal monitor seriale (comandi `t`, `i`, `1`..`5`), poi insieme.
 4. Nell'app (`app.yaml`) dichiarare la porta dell'API locale: `ports: [8100]`.
 5. Modificare `config.json`: `node_id` (l'incrocio giusto della mappa), `position`, `cameras` (zone), `crosswalks`, `p2p.serial.port`.
    Per trovare l'incrocio giusto: `python src/node/tools/build_topology.py --verify src/node/python/topology.json --mark 45.0653,7.6669`.
-   Il prototipo (Via Bricherasio / Via Vela) è `incrocio-124`.
+   Il prototipo (Via Bricherasio / Via Vela) è `incrocio-130` con la mappa attuale (493 incroci); gli id cambiano se si rigenera la mappa.
 6. Facoltativo: `.env` accanto a `config.json` con `SC_P2P_KEY` (stessa chiave su tutti i nodi), vedi `.env.example`.
 7. Avviare l'app: al boot il nodo resta sveglio `boot_active_s` (30 s), poi va a riposo; il sensore sul bordo, un Tag vicino
    o un incrocio vicino lo risvegliano. `http://<ip-board>:8100/api/status` mostra energia, strisce, Tag e radio.
@@ -96,6 +96,18 @@ python build_topology.py --download --bbox 45.055,7.655,45.072,7.685 --save ../.
 ```
 Gli id degli incroci dipendono dai dati: dopo aver rigenerato, controllate `node_id` nei `config.json` e nel `collector.json`.
 Dati cartografici: © OpenStreetMap contributors, ODbL.
+
+### 3.1 L'immagine della mappa sotto i nodi
+La dashboard disegna i nodi sopra le **tile di OpenStreetMap** salvate in `src/collector/tiles/` (120 tile a zoom 17, circa 3 MB):
+è la mappa com'era quando le abbiamo scaricate, non si aggiorna da sola e funziona offline.
+```bash
+python src/node/tools/fetch_osm_tiles.py --dry-run          # quante tile servono
+python src/node/tools/fetch_osm_tiles.py                    # scarica le mancanti (una al secondo, solo per la zona del progetto)
+python src/node/tools/fetch_osm_tiles.py --bbox s,w,n,e --zoom 16   # un'altra zona
+```
+Si scarica una volta sola e solo per aree piccole (lo script si rifiuta oltre 400 tile: il server pubblico di OSM non è per il
+download di massa). Senza tile la dashboard usa uno sfondo disegnato con le strade OSM (`python src/node/tools/build_basemap.py`
+genera `src/collector/basemap.json`). L'attribuzione «© OpenStreetMap contributors» resta visibile in basso a destra sulla mappa.
 
 ## 4. Problemi frequenti
 | Sintomo | Causa probabile |

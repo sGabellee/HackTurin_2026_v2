@@ -23,7 +23,7 @@ energia e **aiuta tutti gli utenti della strada**, a partire da chi fa più fati
 - **Corridoio di emergenza.** Un'ambulanza sveglia gli incroci lungo il suo percorso prima che arrivi, mette in sicurezza le
   strisce e dice al conducente se il corridoio è libero.
 - **Una mappa sola.** Gli incroci sono quelli reali di OpenStreetMap (462 nella zona Crocetta / San Secondo); la dashboard
-  mostra tutta la città in una pagina a colonna unica.
+  mostra tutta la città in una pagina a colonna unica, con i nodi sopra la mappa di OpenStreetMap (immagine salvata, offline).
 
 ## Struttura
 

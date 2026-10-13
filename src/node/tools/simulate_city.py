@@ -56,7 +56,8 @@ from peer import SimRadioBus  # noqa: E402
 from route import Topology, bearing_deg, dist_m  # noqa: E402
 from users import CODES  # noqa: E402
 
-BOARD = "incrocio-124"          # Via Bricherasio / Via Vela: l'incrocio del prototipo
+PROTOTIPO = (45.06536, 7.66689)  # Via Bricherasio / Via Vela: dove sta la scheda del prototipo
+BOARD = None                    # id dell'incrocio piu' vicino, scelto all'avvio dalla topologia (gli id dipendono dai dati OSM)
 CODE_NAMES = {v: k for k, v in CODES.items()}
 LUCI = {0: "spenta", 1: "accesa", 2: "attenzione", 3: "PERICOLO", 4: "assistenza", 5: "EMERGENZA", 6: "incerta"}
 STEP = 0.25                     # passo della simulazione = tick_s dei nodi = 4 fotogrammi al secondo
@@ -321,7 +322,8 @@ def _ora_dormono(c, nid):
     return c.nodi[nid].power.state == "sleep"
 
 
-def blind_crossing(c, nid=BOARD):
+def blind_crossing(c, nid=None):
+    nid = nid or BOARD
     say(f"\n== Non vedente all'incrocio {nid} ({c.nome(nid)})")
     if nid not in c.nodi:
         return say(f"  {nid} non e' tra gli incroci simulati")
@@ -516,9 +518,11 @@ def main(argv=None):
     ap.add_argument("--range", type=float, default=180.0, help="portata della radio in metri")
     args = ap.parse_args(argv)
 
+    global BOARD
     topo = Topology.load(args.topology)
+    BOARD = topo.nearest(*PROTOTIPO) or topo.ids()[0]
     ids = topo.ids()
-    centro = topo.pos(BOARD) if topo.pos(BOARD) else topo.pos(ids[0])
+    centro = topo.pos(BOARD)
     if args.nodes and args.nodes < len(ids):
         ids = sorted(ids, key=lambda n: dist_m(centro, topo.pos(n)))[:args.nodes]
     out = Path(args.out)

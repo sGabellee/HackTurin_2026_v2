@@ -291,7 +291,7 @@ li scarta (si risparmia l'elaborazione Python; il risparmio pieno richiede lo st
 ### 2.12 `config.json` (v2)
 ```jsonc
 {
-  "node_id": "incrocio-124",                        // Via Bricherasio / Via Vela, l'incrocio del prototipo
+  "node_id": "incrocio-130",                        // Via Bricherasio / Via Vela, l'incrocio del prototipo (con la mappa attuale)
   "position": {"lat": 45.06536, "lon": 7.66689},
   "topology": "topology.json",                       // copia locale della topologia della città
   "cameras": {"cam0": {"frame_size": [640, 480], "zones": {...}, "lanes": {...}, "approaches": {...},
@@ -471,7 +471,7 @@ simulatore su 30 incroci).
 
 ## 9. Scelte prese in implementazione (rispetto al testo sopra)
 - **Incrocio del prototipo**: "Via Vela / Corso Stati Uniti" non esiste in OpenStreetMap (le due vie sono parallele). La board
-  (45,06536, 7,66689) è `incrocio-124`, Via Bricherasio / Via Vela, a 11 m. Gli id dipendono dai dati OSM: dopo aver rigenerato
+  (45,06536, 7,66689) è l'incrocio più vicino, Via Bricherasio / Via Vela, a 11 m (`incrocio-124` nella prima mappa generata, `incrocio-130` in quella attuale a 493 incroci). Gli id dipendono dai dati OSM: dopo aver rigenerato
   `topology.json` vanno riallineati `node_id` nei config e nel `collector.json`.
 - **`topology.json`**: in più rispetto a §4 i campi `osm_base`, `params` e, su ogni arco, `oneway`; `source` è "© OpenStreetMap
   contributors, ODbL". Il raggruppamento ha regole in più (rotatorie fino a 120 m, due gruppi entro 60 m con due strade in comune).
@@ -486,5 +486,8 @@ simulatore su 30 incroci).
   vuoto) e il nodo azzera il fotogramma quando va a riposo: al risveglio la camera non "vede" finché non arriva un fotogramma nuovo.
 - **Collettore**: non invia `rq` via radio (è solo in ascolto); le risposte `rs` le riceve se qualcun altro le provoca. Le liste
   lunghe della dashboard (strisce, energia, raccolta, registro) mostrano le prime righe più rilevanti e il resto a richiesta.
+- **Immagine della mappa**: la dashboard mette sotto i nodi le tile di OpenStreetMap salvate in `src/collector/tiles/`
+  (`tools/fetch_osm_tiles.py`, una tantum, zoom 17, 120 tile, `index.json` con attribuzione). Il collettore le serve da
+  `/tiles/<z>/<x>/<y>.png` e l'indice da `/api/tiles`; `/api/basemap` (da `tools/build_basemap.py`) è lo sfondo vettoriale di riserva.
 - **Simulatore**: `--fast` accelera il tempo ma il protocollo radio riallinea gli orologi sfasati oltre 5 s, quindi l'inoltro dei
   pericoli tra incroci va provato in tempo reale. Il simulatore scrive `src/collector/collector_sim.json`.

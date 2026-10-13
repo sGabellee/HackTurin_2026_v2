@@ -1,7 +1,7 @@
 """Test del nodo v2 intero (node.py): energia, sensore sul bordo, camera, attraversamento, luci, Tag,
 corridoio di emergenza tra due incroci e richiesta del collettore via radio.
 
-Due nodi veri della topologia (incrocio-124 e incrocio-134, 97 m a sud-ovest) su un bus radio virtuale
+Due nodi veri della topologia (quello piu' vicino alla scheda del prototipo e un suo vicino a 60-200 m) su un bus radio virtuale
 (peer.SimRadioBus), MCU finti (mcu.FakeMCU), orologio finto, detection finte di simulate.py.
 
 Uso:  python test_node.py   (dalla cartella node/tools/tests; esce con codice 1 se qualcosa fallisce)
@@ -26,7 +26,9 @@ from route import Topology  # noqa: E402
 
 RISULTATI = []
 TOPO = Topology.load(QUI.parents[1] / "python" / "topology.json")
-A, B = "incrocio-124", "incrocio-134"
+A = TOPO.nearest(45.06536, 7.66689)      # gli id dipendono dai dati OSM: si cercano, non si scrivono
+B = min((n for n in TOPO.neighbors(A) if 60 <= TOPO.meters(A, n) <= 200), key=lambda n: TOPO.meters(A, n))
+HD = TOPO.bearing(A, B)                  # direzione di marcia dell'ambulanza: da A verso B
 OROLOGIO = [1000.0]
 
 
@@ -167,14 +169,14 @@ def test_corridoio_emergenza(c):
     c.gira(8)
     check("il nodo B dorme prima del soccorso", b.power.state == "sleep", b.power.state)
     c.bus.attach("amb", TOPO.pos(A), lambda d, r: None)
-    c.manda("amb", {"v": 2, "t": "emv", "d": "amb", "q": 1, "hd": 207, "st": "run"})
+    c.manda("amb", {"v": 2, "t": "emv", "d": "amb", "q": 1, "hd": round(HD), "st": "run"})
     c.gira(0.5)
     a = c.nodi[A]
     corr = [h for h in a._active.values() if h.get("kind") == "emergency_corridor"]
     check("A apre il corridoio di emergenza", corr, list(a._active))
     check("A mette le strisce in emergenza (luce 5)", c.luce(A) == 5, c.luce(A))
     rem = [h for h in b._active.values() if h.get("kind") == "emergency_corridor"]
-    check("B riceve il corridoio (B e' verso 207 gradi)", rem, list(b._active))
+    check("B riceve il corridoio (B e' nella direzione dell'ambulanza)", rem, list(b._active))
     check("B si sveglia per l'emergenza", b.power.state == "active", b.power.state)
     check("anche le strisce di B in emergenza", c.luce(B) == 5, c.luce(B))
     c.gira(12)
@@ -205,7 +207,7 @@ def test_guasto_sensore(c):
     snap = a.status_snapshot()
     check("status_snapshot con energia, attraversamenti, Tag, peer",
           all(k in snap for k in ("power", "crosswalks", "users", "peers", "position", "name")), list(snap))
-    check("nome dell'incrocio dalla topologia", snap["name"] and "Vela" in snap["name"], snap["name"])
+    check("nome dell'incrocio dalla topologia", snap["name"] and snap["name"] == TOPO.name(A), snap["name"])
 
 
 def main():

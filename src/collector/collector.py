@@ -106,6 +106,8 @@ V1_TOPOLOGY = HERE.parent / "server" / "topology.json"
 
 DEFAULTS = {
     "topology": "../node/python/topology.json",
+    "tiles": "tiles",              # tile di OpenStreetMap salvate (tools/fetch_osm_tiles.py): immagine della mappa
+    "basemap": "basemap.json",     # sfondo cartografico (tools/build_basemap.py); se manca la mappa e' senza sfondo
     "nodes": {},
     "pull": {"mode": "manual", "interval_s": 600, "timeout_s": 4.0, "page_limit": 1000,
              "max_pages": 200, "workers": 8},
@@ -1093,6 +1095,9 @@ class Collector:
         self.live_timeout_s = max(2.0, _num(self.cfg.get("live_timeout_s"), 30.0))
         topo = _resolve(base, self.cfg.get("topology"))
         self.city = CityMap(topo, fallbacks=[V1_TOPOLOGY])
+        self._tiles_dir = _resolve(base, self.cfg.get("tiles"))
+        self._basemap_path = _resolve(base, self.cfg.get("basemap"))
+        self._basemap = (None, None)       # (mtime, contenuto)
         db = self.cfg.get("db") or "collector.db"
         self.store = Store(db if db == ":memory:" else _resolve(base, db))
         self._lock = threading.RLock()
@@ -1627,6 +1632,46 @@ class Collector:
                 "topology": {"format": city["format"], "file": city["file"], "rev": city["rev"],
                              "nodes": len(city["nodes"]), "edges": len(city["edges"]), "source": city["source"]}}
 
+    def api_tiles(self):
+        """Indice delle tile di OpenStreetMap salvate: {"zoom", "tiles": [[x, y]], "attribution"}; vuoto se mancano."""
+        vuoto = {"zoom": None, "tiles": [], "attribution": "© OpenStreetMap contributors"}
+        try:
+            return json.loads((self._tiles_dir / "index.json").read_text(encoding="utf-8")) if self._tiles_dir else vuoto
+        except (OSError, ValueError):
+            return vuoto
+
+    def tile_file(self, path):
+        """Contenuto di /tiles/<z>/<x>/<y>.png (solo numeri: niente percorsi strani), None se non c'e'."""
+        parti = path.strip("/").split("/")
+        if len(parti) != 4 or parti[0] != "tiles" or self._tiles_dir is None:
+            return None
+        z, x, y = parti[1], parti[2], parti[3][:-4] if parti[3].endswith(".png") else ""
+        if not (z.isdigit() and x.isdigit() and y.isdigit()):
+            return None
+        try:
+            return (self._tiles_dir / z / x / f"{y}.png").read_bytes()
+        except OSError:
+            return None
+
+    def api_basemap(self):
+        """Sfondo cartografico: {"ways": [{"c", "n", "g"}], "labels": [...], "bbox"}; vuoto se manca il file."""
+        vuoto = {"version": 1, "ways": [], "labels": [], "bbox": None, "source": None}
+        p = self._basemap_path
+        try:
+            mt = p.stat().st_mtime if p else None
+            if mt is None:
+                return vuoto
+            if self._basemap[0] != mt:
+                dati = json.loads(p.read_text(encoding="utf-8"))
+                ok = isinstance(dati, dict) and isinstance(dati.get("ways"), list)
+                self._basemap = (mt, dati if ok else vuoto)
+            return self._basemap[1]
+        except (OSError, ValueError) as e:
+            if not getattr(self, "_basemap_warned", False):
+                self._basemap_warned = True
+                print(f"[collettore] sfondo cartografico non leggibile ({e!r}): mappa senza sfondo")
+            return vuoto
+
     def api_map(self, geom=True):
         now = now_ms()
         city, hz, by_node, emer = self._context(now)
@@ -1818,6 +1863,13 @@ class Collector:
                 return 200, {"ok": True, "ts": now_ms()}, None
             if path == "/api/overview":
                 return 200, self.api_overview(), None
+            if path == "/api/tiles":
+                return 200, self.api_tiles(), None
+            if path.startswith("/tiles/"):
+                png = self.tile_file(path)
+                return (200, png, "image/png") if png else (404, b"tile mancante", "text/plain; charset=utf-8")
+            if path == "/api/basemap":
+                return 200, self.api_basemap(), None
             if path == "/api/map":
                 return 200, self.api_map(geom=q.get("geom", "1") not in ("0", "false", "no")), None
             if path == "/api/nodes":
@@ -1886,7 +1938,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", "max-age=86400" if ctype == "image/png" else "no-store")
             self.end_headers()
             if not head and body:
                 self.wfile.write(body)

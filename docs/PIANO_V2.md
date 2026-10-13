@@ -10,9 +10,9 @@ Nessun commit è stato fatto: la decisione è vostra.
 | Energia, MCU, segnali | `power.py`, `mcu.py`, `signals.py`, `sketch/sketch.ino` | riposo/attivo/raffreddamento, riflesso locale e fail-safe, luci con 7 codici |
 | Attraversamenti e utenti | `crosswalk.py`, `users.py`, `situation.py`, `events.py` | mai "via libera" senza camera sveglia e fotogramma recente |
 | Radio SC-P2P v2 e instradamento | `peer.py`, `route.py` | seriale/UDP/bus virtuale, firma, dedup, più salti |
-| Mappa della città | `tools/build_topology.py`, `topology.json` | 462 incroci OSM; la board è `incrocio-124` |
+| Mappa della città | `tools/build_topology.py`, `topology.json` | mappa OSM attuale con 493 incroci; la board è `incrocio-130` (gli id cambiano se si rigenera) |
 | Nodo integrato | `node.py`, `main.py`, `config.py`, `config.json`, `publisher.py` | senza server; sensori → energia → strisce → Tag → radio |
-| Collettore e dashboard | `src/collector/` | pull con cursore, ascolto passivo, una pagina a colonna unica |
+| Collettore e dashboard | `src/collector/` | pull con cursore, ascolto passivo, una pagina a colonna unica, nodi sopra le tile OSM salvate |
 | Simulatore della città | `tools/simulate_city.py` | 462 nodi, MCU finti, Tag virtuali, 5 scenari; provato anche sulla dashboard |
 | Firmware ESP32 | `esp32_radio`, `esp32_tag` | compilano senza errori né avvisi con core 2.0.17 (C3) e 3.x (C3 ed ESP32) |
 | Strumenti | `replay.py`, `zone_editor.py`, `export_data.py` | aggiornati alla v2 (più strisce, MCU finto, niente server) |
